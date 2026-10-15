@@ -1,0 +1,143 @@
+SHOWPLAYER – EINRICHTUNG MIT ONEDRIVE UND ALS APP
+=================================================
+(Läuft über GitHub Pages, Daten in deinem OneDrive.)
+
+Inhalt dieses Ordners
+  index.html            die App
+  config.js             Client-ID deiner App-Registrierung "Showplayer"
+  manifest.webmanifest  macht die App installierbar
+  sw.js                 sorgt dafür, dass die App auch offline startet
+  icon-192.png / icon-512.png / apple-touch-icon.png   App-Symbol
+  .nojekyll / README.md für GitHub
+  (Diese Anleitung muss nicht mit hochgeladen werden.)
+
+
+SCHRITT 1 – App auf GitHub Pages stellen (kostenlos, ca. 10 Minuten)
+---------------------------------------------------------------------
+Die App braucht eine feste https-Adresse, sonst lässt Microsoft keine Anmeldung zu.
+
+  1. https://github.com öffnen und anmelden (oder kostenloses Konto anlegen).
+  2. Oben rechts "+" -> "New repository".
+       Repository name:  showplayer
+       Sichtbarkeit:     Public  (GitHub Pages ist kostenlos nur für
+                         öffentliche Repositorys; deine Musik und Daten
+                         liegen NICHT dort, sondern in deinem OneDrive)
+     -> "Create repository".
+  3. Auf der neuen Seite "uploading an existing file" anklicken.
+     ALLE Dateien aus diesem Ordner in das Feld ziehen (auch die
+     unsichtbare Datei ".nojekyll" – siehe Hinweis unten) und unten
+     "Commit changes" klicken.
+  4. Im Repository: "Settings" -> links "Pages".
+       Source:  "Deploy from a branch"
+       Branch:  "main"  und Ordner  "/ (root)"  -> "Save".
+  5. 1–2 Minuten warten. Oben auf der Pages-Seite erscheint deine Adresse:
+       https://DEIN-GITHUB-NAME.github.io/showplayer/
+
+Hinweis .nojekyll: Windows blendet Dateien mit Punkt am Anfang oft aus.
+Fehlt sie, funktioniert die App trotzdem – sie verhindert nur, dass
+GitHub die Dateien unnötig umbaut.
+
+Updates später: im Repository "Add file" -> "Upload files" -> die neue
+index.html hineinziehen -> "Commit changes". Nach 1–2 Minuten ist sie online.
+
+Merke dir die genaue Adresse MIT Schrägstrich am Ende.
+Du findest sie später auch in der App unter Einstellungen (Zahnrad) ->
+"OneDrive-Speicher" -> "Umleitungs-URI".
+
+
+SCHRITT 2 – GitHub-Adresse bei Microsoft eintragen (ca. 3 Minuten, einmalig)
+------------------------------------------------------------------------------
+  1. https://portal.azure.com öffnen und mit deinem privaten Microsoft-Konto
+     anmelden.
+  2. Oben in die Suche "App-Registrierungen" eingeben und öffnen.
+  3. Die Registrierung "Showplayer" anklicken.
+  4. Links "Authentifizierung" öffnen.
+  5. Bei "Single-Page-Anwendung" auf "URI hinzufügen" klicken und die Adresse
+     aus Schritt 1 eintragen – genau so, MIT Schrägstrich am Ende, z. B.
+       https://DEIN-GITHUB-NAME.github.io/showplayer/
+     (Die alte Netlify-Adresse kannst du stehen lassen oder löschen.)
+  6. Unten "Speichern" klicken.
+
+Die Daten liegen weiterhin in OneDrive unter:   Apps / Showplayer / Showplayer
+  showplayer-daten.json    Veranstaltungen, Abläufe, Programme, Einwürfe, Einstellungen
+  Lieder/                  alle Musikdateien
+
+
+SCHRITT 3 – Verbinden
+----------------------
+Neue GitHub-Adresse öffnen. (Für den Browser ist das eine neue Seite – deine
+Veranstaltungen und Lieder holt sich die App nach dem Verbinden komplett aus
+OneDrive zurück. Vorher bitte in der alten Netlify-App einmal prüfen, dass
+oben "OneDrive · abgeglichen" steht.)
+App öffnen. Ist dein Browser schon bei Microsoft angemeldet, verbindet sich
+die App von selbst. Sonst oben rechts auf "OneDrive verbinden" tippen und
+den Zugriff erlauben. Die App fragt nur nach ihrem eigenen Ordner in OneDrive.
+
+
+SCHRITT 4 – Auf iPad, iPhone und Laptop
+----------------------------------------
+iPad/iPhone:  Adresse in Safari öffnen -> Teilen-Symbol -> "Zum Home-Bildschirm".
+Windows:      Adresse in Edge oder Chrome öffnen -> im Adressfeld auf das
+              Symbol "App installieren" klicken (bzw. Menü -> Apps ->
+              "Diese Website als App installieren").
+Danach auf jedem Gerät einmal mit OneDrive verbinden.
+
+
+SCHON VORHANDENE DATEN ÜBERNEHMEN
+----------------------------------
+Aus der bisherigen Online-Version (claude.ai):
+  Zahnrad -> "Alles sichern (ZIP mit Liedern)" -> ZIP speichern.
+  In der neuen App: Zahnrad -> "Sicherung laden …" -> die ZIP auswählen.
+Aus der Offline-Datei (Ordner/USB-Stick):
+  In der neuen App: Zahnrad -> "Sicherung laden …" -> aus dem Ordner die Datei
+  showplayer-daten.json und alle Lieder aus "Lieder" markieren.
+Danach lädt die App alles automatisch nach OneDrive hoch.
+
+
+FERNBEDIENUNG (iPad/iPhone steuert den Laptop)
+----------------------------------------------
+Laptop:  Zahnrad -> Fernbedienung -> "Dieses Gerät spielt" (Standard) und
+         "Fernbedienung erlauben" einschalten. Danach einmal irgendwo in den
+         Showplayer klicken (sonst lässt der Browser keine Musik zu, die von
+         außen gestartet wird).
+iPad:    Zahnrad -> Fernbedienung -> "Dieses Gerät ist Fernbedienung".
+         Die App sucht den Laptop und verbindet sich nach ein paar Sekunden.
+         Oben steht dann "Fernbedienung -> Laptop", das Deck hat eine blaue Linie.
+So funktioniert es:
+  - Beide Geräte müssen mit OneDrive verbunden sein. Darüber finden sie sich
+    (kleine Dateien im Unterordner "remote"), danach sprechen sie direkt
+    miteinander – ohne Verzögerung.
+  - Am besten sind beide im selben WLAN oder Hotspot. Steht die Verbindung,
+    läuft sie auch weiter, wenn das Internet kurz wegfällt.
+  - Reißt die Verbindung ab, verbindet sich das iPad von selbst neu (oder
+    oben auf die Anzeige tippen).
+  - Die Musik muss auf dem Laptop liegen ("Alle Lieder offline bereitstellen").
+
+
+ÜBERGANG UND IMPORT AUS WORD/EXCEL
+----------------------------------
+Übergang:  Im Programm auf "Übergang" tippen und die Überlappung wählen
+           (z. B. 4 s). Gilt beim automatischen Weiterlaufen (Auto weiter).
+Import:    Im Ablauf oder Programm auf "Word/Excel" tippen und eine .xlsx-,
+           .docx- oder .csv-Datei wählen – oder den Inhalt aus Word/Excel
+           kopieren und einfügen. Spalten wie Zeit · Programmpunkt · Notiz ·
+           Musik werden erkannt. Fehlende Lieder danach hochladen – Dateien
+           mit passendem Namen werden automatisch zugeordnet.
+           Alte Formate (.xls/.doc) bitte vorher als .xlsx/.docx speichern.
+
+
+GUT ZU WISSEN
+-------------
+- Die App startet und spielt auch ohne Netz. Lieder, die du auf einem Gerät
+  hinzufügst, werden nach OneDrive hochgeladen und auf den anderen Geräten
+  beim ersten Abspielen geladen.
+- VOR JEDER VERANSTALTUNG auf dem Gerät, mit dem du spielst, mit Internet:
+  Veranstaltung -> "..." -> "Alle Lieder offline bereitstellen".
+- Änderungen von mehreren Geräten werden zusammengeführt, nicht überschrieben.
+  Andere Geräte holen sich den neuen Stand beim Öffnen, beim Zurückwechseln
+  in die App und jede Minute.
+- Microsoft lässt Anmeldungen in Web-Apps nur begrenzt laufen. Es kann
+  gelegentlich sein, dass die App kurz zur Microsoft-Seite springt und
+  sofort zurückkommt, oder oben "bitte erneut anmelden" zeigt. Einmal
+  antippen genügt.
+- Updates der App: neue index.html einfach über die alte hochladen.
