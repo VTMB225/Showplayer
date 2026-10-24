@@ -923,7 +923,7 @@ function toast(msg, ms=2600){ let t = $(".toast"); if (!t) { t = document.create
 const decks = [$("#au"), $("#au2")];
 let au = decks[0];
 const gains = new Map();
-const player = {sid:null, k:null, src:null, evId:null, url:null, halted:false};
+const player = {sid:null, k:null, src:null, evId:null, url:null, halted:false, pend:null};
 let actx = null, gain = null;
 function unlock(){
   if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return; // ohne Klick auf diesem Gerät bliebe der Ton stumm
@@ -943,6 +943,9 @@ function progNextIdx(e){ const st = stOf(e.id); if (st.lastKey) { const i = e.pr
 function nextUp(){
   const e = recs.get(player.evId) && !recs.get(player.evId).deleted ? recs.get(player.evId) : ev(); if (!e) return null;
   const st = stOf(e.id);
+  // Nach Anhalten innerhalb eines Programmpunkts: zuerst das nächste Lied dieses Punkts
+  const pd = player.halted && player.pend;
+  if (pd) { const pe = evById(pd.evId); const pp = pe && rd(pe).find(x => x.k === pd.k); if (pp && pp.songs.includes(pd.sid) && song(pd.sid) && !song(pd.sid).deleted) return {e: pe, it: {k: pp.k, sid: pd.sid}, src: "run"}; }
   while (st.queue.length) { const k = st.queue[0]; const it = e.pool.find(i=>i.k===k); if (it) return {e, it, src:"pool"}; st.queue.shift(); }
   const i = progNextIdx(e); if (i < e.program.length) return {e, it: e.program[i], src:"prog"};
   return null;
@@ -961,7 +964,7 @@ async function start(e, it, src, opt){
   else { for (const d of decks) if (d !== au) cleanupDeck(d); }
   if (au._url) URL.revokeObjectURL(au._url);
   au._url = player.url = URL.createObjectURL(blob);
-  Object.assign(player, {sid:s.id, k:it.k, src, evId:e.id, halted:false});
+  Object.assign(player, {sid:s.id, k:it.k, src, evId:e.id, halted:false, pend:null});
   if (src === "run") selRun = null; if (src === "prog") selProg = null;
   setVol(xo > 0.25 ? 0 : 1); au.src = player.url;
   try { await au.play(); } catch { toast("Zum Abspielen einmal auf Play tippen."); }
@@ -980,7 +983,7 @@ function playProg(k){ if (isRemote()) return send({a:"prog", k, ev:curEv}); _pla
 function playNow(k){ if (isRemote()) return send({a:"pool", k, ev:curEv}); _playNow(k, curEv); }
 function toggleQueue(k){ if (isRemote()) return send({a:"queue", k, ev:curEv}); _toggleQueue(k, curEv); }
 function goNext(){ if (isRemote()) return send({a:"next"}); return _goNext(); }
-function stopNow(){ for (const d of decks) cleanupDeck(d); au = decks[0]; crossing = false; Object.assign(player, {sid:null, k:null, src:null, url:null, halted:false}); wake(false); render(); }
+function stopNow(){ for (const d of decks) cleanupDeck(d); au = decks[0]; crossing = false; Object.assign(player, {sid:null, k:null, src:null, url:null, halted:false, pend:null}); wake(false); render(); }
 const onEnded = ev0 => {
   if (ev0 && ev0.target !== au) { cleanupDeck(ev0.target); return; }
   crossing = false;
@@ -988,6 +991,7 @@ const onEnded = ev0 => {
   if (e && player.src === "run") {
     const p = rd(e).find(x=>x.k===player.k);
     if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i+1).find(id => song(id) && !song(id).deleted);
+      if (nx && p.stop) { Object.assign(player, {sid:null, k:null, src:null, halted:true, pend:{evId: e.id, k: p.k, sid: nx}}); render(); toast("Angehalten. Play startet „" + song(nx).title + "“."); return; }
       if (nx) { start(e, {k: p.k, sid: nx}, "run"); return; }
       if (p.stop) { Object.assign(player, {sid:null, k:null, src:null, halted:true}); render(); toast("„" + p.title + "“ – Musik zu Ende."); return; } }
     if (auto) goNext(); else { Object.assign(player, {sid:null, k:null, src:null}); render(); }
@@ -1544,7 +1548,7 @@ const odPutJson = (path, obj) => odPutBlob(path, new Blob([JSON.stringify(obj)],
 
 function stateObj(){
   const st = player.evId ? stOf(player.evId) : null;
-  return {evId: player.evId || null, sid: player.sid, k: player.k, src: player.src, halted: !!player.halted, paused: au.paused, t: Math.round((au.currentTime || 0) * 10) / 10, d: Math.round((au.duration || 0) * 10) / 10,
+  return {evId: player.evId || null, sid: player.sid, k: player.k, src: player.src, halted: !!player.halted, pend: player.pend || null, paused: au.paused, t: Math.round((au.currentTime || 0) * 10) / 10, d: Math.round((au.duration || 0) * 10) / 10,
     auto, fade: fadeSec, xend: xEnd, ready: activated(), lastKey: st?.lastKey || null, lastIdx: st?.lastIdx ?? -1, played: st ? [...st.played].slice(-150) : [], queue: st ? st.queue.slice(0, 30) : []};
 }
 function pushState(force){
@@ -1554,7 +1558,7 @@ function pushState(force){
 }
 function applyMirror(st){
   R.mirror = st; R.mirrorAt = Date.now();
-  Object.assign(player, {sid: st.sid || null, k: st.k || null, src: st.src || null, evId: st.evId || null, halted: !!st.halted});
+  Object.assign(player, {sid: st.sid || null, k: st.k || null, src: st.src || null, evId: st.evId || null, halted: !!st.halted, pend: st.pend || null});
   if (st.evId) { const s2 = stOf(st.evId); s2.lastKey = st.lastKey; s2.lastIdx = st.lastIdx ?? -1; s2.played = new Set(st.played || []); s2.queue = st.queue || []; if (!curEv || !evById(curEv)) curEv = st.evId; }
 }
 function execCmd(d){
@@ -1717,7 +1721,7 @@ function autoNextTarget(){
   const e = recs.get(player.evId);
   if (e && player.src === "run") {
     const p = rd(e).find(x => x.k === player.k);
-    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i + 1).find(id => song(id) && !song(id).deleted); if (nx) return {e, it: {k: p.k, sid: nx}, src: "run"}; if (p.stop) return null; }
+    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i + 1).find(id => song(id) && !song(id).deleted); if (p.stop) return null; if (nx) return {e, it: {k: p.k, sid: nx}, src: "run"}; }
     return auto ? nextUp() : null;
   }
   const it = e && player.src === "prog" ? e.program.find(i => i.k === player.k) : null;
