@@ -2,7 +2,7 @@
 // Die Lieder selbst liegen im Speicher der App (nicht hier) und kommen beim Abgleich aus OneDrive.
 // Mit Internet wird immer die neueste Version geladen (Browser-Zwischenspeicher wird umgangen),
 // ohne Internet die zuletzt gespeicherte.
-const CACHE = "showplayer-v9";
+const CACHE = "showplayer-v10";
 const ASSETS = ["./", "./index.html", "./config.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, {cache: "reload"})))).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {

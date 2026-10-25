@@ -277,7 +277,16 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 
 /* Deck */
 .deck{background:var(--panel);border-top:1px solid var(--line);padding:0 16px 12px}
-.seek{width:100%;margin:0;height:22px;display:block;accent-color:var(--amber);cursor:pointer}
+.wavewrap{position:relative;height:46px;margin:8px 0 4px}
+.wavewrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.seek{position:absolute;inset:0;width:100%;height:100%;margin:0;display:block;opacity:0;cursor:pointer}
+.clk{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:2px;font:500 13px/1.3 var(--f-body);color:var(--muted);min-width:0}
+.clk .now2{font:700 15px/1 var(--f-mono);color:var(--fg);font-variant-numeric:tabular-nums}
+.clk .np{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:100%}
+.clk .np b{color:var(--fg);font-weight:600}
+.clk .cd{font:700 13px/1 var(--f-mono);font-variant-numeric:tabular-nums}
+.clk.soon .cd,.clk.soon .np b{color:var(--amber)}
+.clk.late .cd,.clk.late .np b{color:var(--red)}
 .deckrow{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:24px}
 .dcenter{display:flex;align-items:center;gap:20px}
 .dnext{min-width:0;text-align:right}
@@ -362,6 +371,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
   .txtb{padding:0 8px;font-size:12px}
   .row .ib[data-more]{width:32px}
   .deck{padding:0 12px 10px}
+  .wavewrap{height:38px;margin:6px 0 2px}
   .deckrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"now tc" "nx nx" "tr tr";gap:6px 10px}
   .dcenter{display:contents}
   .now{grid-area:now} .tc{grid-area:tc} .dnext{grid-area:nx;text-align:left} .transport{grid-area:tr;justify-content:center;margin-top:4px}
@@ -462,11 +472,12 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
   </div>
 
   <footer class="deck">
-    <input class="seek" id="seek" type="range" min="0" max="1000" value="0" aria-label="Position im Lied">
+    <div class="wavewrap"><canvas id="wave" aria-hidden="true"></canvas><input class="seek" id="seek" type="range" min="0" max="1000" value="0" aria-label="Position im Lied"></div>
     <div class="deckrow">
       <div class="now">
         <div class="src" id="nowSrc">Bereit</div>
         <div class="t" id="nowT">Kein Lied geladen</div>
+        <div class="clk" id="clk"></div>
       </div>
       <div class="dcenter">
       <div class="tc" id="tc"><div class="rem" id="tcRem">0:00</div><div class="el" id="tcEl">0:00 / 0:00</div></div>
@@ -498,7 +509,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = s => { if (!isFinite(s) || s < 0) s = 0; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
-const APP_VERSION = "2026-10-25f";
+const APP_VERSION = "2026-10-25g";
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const MAX_SYNC = 14.5 * 1024 * 1024; // größer passt nicht in den Online-Speicher
 const SETTING_KEYS = ["keys","fade","xfade","xend","auto"];
@@ -1052,6 +1063,7 @@ async function start(e, it, src, opt){
   crossing = false;
   $(".toast")?.remove();
   mediaSession(s); wake(true); render();
+  if (!waveOk(s)) setTimeout(async () => { if (waveOk(song(s.id))) return; try { const ab = await decodeBlob(blob); s.wave = waveFrom(ab); s.waveV = WAVE_V; save(s); if (player.sid === s.id) drawWave(); } catch {} }, 1500);
 }
 function evById(id){ const e = recs.get(id); return e && !e.deleted ? e : null; }
 function _playProg(k, evId){ const e = evById(evId) || ev(); const it = e?.program.find(i=>i.k===k); if (!it) return; (au.paused ? Promise.resolve() : fadeOut(xSec)).then(() => start(e, it, "prog")); }
@@ -1112,6 +1124,7 @@ function tick(){ const {d, c, paused} = timing();
   $("#tcRem").textContent = player.sid ? "-" + fmt(d - c) : "0:00";
   $("#tcEl").textContent = fmt(c) + " / " + fmt(d);
   $("#tc").classList.toggle("warn", !!player.sid && d > 0 && d - c < 10 && !paused);
+  drawWave();
 }
 function renderDeck(){
   const s = player.sid ? song(player.sid) : null; const e = recs.get(player.evId);
@@ -1128,7 +1141,7 @@ function renderDeck(){
   $("#playIco").innerHTML = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
   $("#bPlay").setAttribute("aria-label", playing ? "Pause" : "Abspielen");
   $("#bAuto").classList.toggle("on", auto);
-  renderLevels();
+  renderLevels(); if (typeof drawWave === "function") drawWave();
   $("#xendBtn").textContent = xendLabel(); $("#xendBtn").classList.toggle("on", xendVal() > 0);
   $("#fadeLbl").textContent = String(isRemote() && R.mirror ? R.mirror.fade : fadeSec).replace(".", ",") + "s";
   if (isRemote() && R.mirror) $("#bAuto").classList.toggle("on", !!R.mirror.auto);
@@ -2120,6 +2133,76 @@ $("#bMix").addEventListener("click", mixSheet);
 
 
 
+
+/* ---------- Wellenform im Deck ---------- */
+var waveCache = {sid: null, str: null, arr: null};
+function wavePeaks(sid){
+  const s2 = song(sid); if (!waveOk(s2)) return null;
+  if (waveCache.sid !== sid || waveCache.str !== s2.wave) { waveCache.sid = sid; waveCache.str = s2.wave; waveCache.arr = Uint8Array.from(s2.wave, ch => Math.max(0, WAVE_ABC.indexOf(ch))); }
+  return waveCache.arr;
+}
+var waveCol = null;
+function drawWave(){
+  const cv = $("#wave"); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1, W = Math.max(1, Math.round(cv.clientWidth * dpr)), H = Math.max(1, Math.round(cv.clientHeight * dpr));
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; waveCol = null; }
+  if (!waveCol) { const cs = getComputedStyle(document.documentElement); waveCol = {amber: cs.getPropertyValue("--amber").trim(), cyan: cs.getPropertyValue("--cyan").trim(), line: cs.getPropertyValue("--line").trim(), muted: cs.getPropertyValue("--muted").trim(), fg: cs.getPropertyValue("--fg").trim(), red: cs.getPropertyValue("--red").trim()}; }
+  const g = cv.getContext("2d"); g.clearRect(0, 0, W, H);
+  const {d, c} = timing(), f = d > 0 && player.sid ? Math.max(0, Math.min(1, (seeking ? seek.value / 1000 * d : c) / d)) : 0;
+  const played = player.src === "pool" ? waveCol.cyan : waveCol.amber;
+  const pk = player.sid ? wavePeaks(player.sid) : null, mid = H / 2, px = W * f;
+  if (pk) {
+    const bw = Math.max(2, Math.round(2 * dpr)), gap = Math.max(1, Math.round(dpr)), n = pk.length;
+    // letzte 10 Sekunden leicht rot hinterlegen
+    if (d > 10) { g.fillStyle = waveCol.red; g.globalAlpha = .12; g.fillRect(W * (1 - 10 / d), 0, W * 10 / d, H); g.globalAlpha = 1; }
+    for (let x = 0; x < W; x += bw + gap) {
+      const i0 = Math.floor(x / W * n), i1 = Math.max(i0 + 1, Math.floor((x + bw) / W * n)); let v = 0; for (let i = i0; i < i1 && i < n; i++) if (pk[i] > v) v = pk[i];
+      const h = Math.max(dpr, v / 63 * (H - 2 * dpr));
+      g.fillStyle = x + bw <= px ? played : waveCol.muted; g.globalAlpha = x + bw <= px ? 1 : .55;
+      g.fillRect(x, mid - h / 2, bw, h);
+    }
+    g.globalAlpha = 1;
+  } else {
+    const th = Math.max(3, Math.round(4 * dpr));
+    g.fillStyle = waveCol.line; g.fillRect(0, mid - th / 2, W, th);
+    g.fillStyle = played; g.fillRect(0, mid - th / 2, px, th);
+    if (player.sid && !isRemote()) { g.fillStyle = waveCol.muted; g.font = `${Math.round(11 * dpr)}px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = "right"; g.fillText("Wellenform wird berechnet …", W - 4 * dpr, mid - 6 * dpr); }
+  }
+  if (player.sid) { g.fillStyle = waveCol.fg; g.fillRect(Math.min(W - 2 * dpr, px), 0, Math.max(2, 2 * dpr), H); }
+}
+(function waveLoop(){ if (player.sid && !timing().paused) drawWave(); setTimeout(() => requestAnimationFrame(waveLoop), 60); })();
+window.addEventListener("resize", () => { waveCol = null; drawWave(); });
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { waveCol = null; drawWave(); }); } catch {}
+
+/* ---------- Uhr und Countdown zum nächsten Ablaufpunkt ---------- */
+const clkWarned = new Set();
+function pointDiff(p, now){ // Sekunden bis zum Punkt (negativ = überfällig), über Mitternacht hinweg
+  const m = /^(\d{1,2}):(\d{2})$/.exec(p.time || ""); if (!m) return null;
+  const t = new Date(now); t.setHours(+m[1], +m[2], 0, 0);
+  let s2 = (t - now) / 1000; if (s2 < -12 * 3600) s2 += 86400; else if (s2 > 12 * 3600) s2 -= 86400; return s2;
+}
+function fmtCd(sec){ sec = Math.round(Math.abs(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60;
+  return h ? `${h} h ${String(m).padStart(2, "0")} min` : sec >= 600 ? `${m} min` : `${m}:${String(x).padStart(2, "0")}`; }
+function renderClock(){
+  const el = $("#clk"); if (!el) return;
+  const now = new Date(), hh = now.toLocaleTimeString("de-DE", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  const e = ev(); let html = `<span class="now2">${hh}</span>`, cls = "";
+  const today = now.toLocaleDateString("sv-SE");
+  if (e && (!e.date || e.date === today)) {
+    const cand = rd(e).filter(p => !p.done).map(p => ({p, d: pointDiff(p, now)})).filter(x => x.d != null && x.d > -3600).sort((a, b) => a.d - b.d);
+    const nx = cand[0];
+    if (nx) {
+      const name = `${esc(nx.p.time)} <b>${esc(nx.p.title)}</b>`;
+      if (nx.d < 0) { cls = "late"; html += `<span class="np">${name}</span><span class="cd">fällig seit ${fmtCd(nx.d)}</span>`; }
+      else { if (nx.d <= 300) cls = "soon"; html += `<span class="np">Nächster: ${name}</span><span class="cd">in ${fmtCd(nx.d)}</span>`; }
+      const wk = nx.p.k + "|" + nx.p.time;
+      if (nx.d <= 300 && nx.d > 280 && !clkWarned.has(wk)) { clkWarned.add(wk); toast(`In 5 Minuten: ${nx.p.time} ${nx.p.title}`, 6000); }
+    }
+  }
+  el.className = "clk " + cls; if (el.innerHTML !== html) el.innerHTML = html;
+}
+setInterval(renderClock, 1000);
+
 /* ---------- Schnellsuche oben in der Kopfzeile: Lied finden und spontan spielen ---------- */
 let qsFirst = null;
 function qsWhere(e){
@@ -2178,11 +2261,25 @@ function normStatText(){
   return `${done} von ${all.length} Liedern gemessen${left ? ` – die übrigen ${left} werden gemessen, sobald nichts läuft und sie auf diesem Gerät liegen` : ""}${bad ? ` · ${bad} ließen sich nicht messen` : ""}. Leise Lieder werden bis zu +${NORM_MAX_BOOST} dB angehoben, laute abgesenkt.`;
 }
 function renderNorm(){ const n = document.querySelector("#normStat"); if (n) n.textContent = normStatText(); }
-async function measureLoudness(blob){
+const WAVE_N = 600, WAVE_V = 1, WAVE_ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const waveOk = s => !!s && typeof s.wave === "string" && s.waveV === WAVE_V;
+function waveFrom(ab){
+  const n = WAVE_N, len = ab.length, chs = []; for (let c = 0; c < ab.numberOfChannels; c++) chs.push(ab.getChannelData(c));
+  const pk = new Float32Array(n); let mx = 0;
+  for (let b = 0; b < n; b++) { const a = Math.floor(b * len / n), z = Math.floor((b + 1) * len / n), st = Math.max(1, Math.floor((z - a) / 2000)); let m = 0, sq = 0, cnt = 0;
+    for (const x of chs) for (let i = a; i < z; i += st) { const v = Math.abs(x[i]); if (v > m) m = v; sq += v * v; cnt++; }
+    pk[b] = 0.6 * m + 0.4 * Math.sqrt(sq / Math.max(1, cnt)) * 1.8; if (pk[b] > mx) mx = pk[b]; }
+  let out = ""; for (let b = 0; b < n; b++) out += WAVE_ABC[Math.max(0, Math.min(63, Math.round(pk[b] / (mx || 1) * 63)))];
+  return out;
+}
+async function decodeBlob(blob){
   const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!AC) throw new Error("kein OfflineAudioContext");
-  const raw = await blob.arrayBuffer();
-  const dctx = new AC(1, 1, 44100);
-  const ab = await new Promise((res, rej) => { const pr = dctx.decodeAudioData(raw, res, rej); if (pr && pr.then) pr.then(res, rej); });
+  const raw = await blob.arrayBuffer(); const dctx = new AC(1, 1, 44100);
+  return await new Promise((res, rej) => { const pr = dctx.decodeAudioData(raw, res, rej); if (pr && pr.then) pr.then(res, rej); });
+}
+async function analyzeAudio(blob){ const ab = await decodeBlob(blob); let wave = null; try { wave = waveFrom(ab); } catch {} return {lufs: await measureLoudness(ab), wave}; }
+async function measureLoudness(ab){
+  const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   const SR = 16000, len = Math.max(SR, Math.ceil(ab.duration * SR));
   const oc = new AC(1, len, SR);
   const src = oc.createBufferSource(); src.buffer = ab;
@@ -2209,12 +2306,12 @@ async function normQueue(){
   if (normBusy || isRemote()) return; normBusy = true;
   try {
     for (const s of songs()) {
-      if ((typeof s.lufs === "number" && s.lufsV === NORM_V) || s.lufsErr === NORM_V || !audioKeys.has(s.id)) continue;
+      if (((typeof s.lufs === "number" && s.lufsV === NORM_V) && waveOk(s)) || s.lufsErr === NORM_V || !audioKeys.has(s.id)) continue;
       if (player.sid && !au.paused) break;          // während der Show nicht rechnen – später weiter
       const blob = await audioGet(s.id); if (!blob) continue;
-      try { s.lufs = Math.round(await measureLoudness(blob) * 10) / 10; s.lufsV = NORM_V; delete s.lufsErr; }
+      try { const r = await analyzeAudio(blob); s.lufs = Math.round(r.lufs * 10) / 10; s.lufsV = NORM_V; delete s.lufsErr; if (r.wave) { s.wave = r.wave; s.waveV = WAVE_V; } }
       catch { s.lufsErr = NORM_V; }
-      save(s); renderNorm();
+      save(s); renderNorm(); if (player.sid === s.id) drawWave();
       await new Promise(r => setTimeout(r, 250));
     }
   } finally { normBusy = false; }
