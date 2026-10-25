@@ -498,6 +498,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = s => { if (!isFinite(s) || s < 0) s = 0; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
+const APP_VERSION = "2026-10-25f";
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const MAX_SYNC = 14.5 * 1024 * 1024; // größer passt nicht in den Online-Speicher
 const SETTING_KEYS = ["keys","fade","xfade","xend","auto"];
@@ -1226,7 +1227,7 @@ function hotkeyList(){ return `<dl class="hk">${ACTIONS.map(([id,label]) => `<dt
 function setFade(v){ fadeSec = Math.min(15, Math.max(0.5, Math.round(v*2)/2)); ls.set("fade", fadeSec); renderDeck(); }
 function settingsSheet(){
   const f = v => String(v).replace(".", ",");
-  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25e</small></h4>
+  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version ${APP_VERSION}</small></h4>
     <div class="setrow"><span class="lv"><span class="lbl2">Fade-Zeit (FADE-Taste)</span><b id="sFadeV">${f(fadeSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="f-">−</button><input type="range" id="sFade" min="0.5" max="15" step="0.5" value="${fadeSec}" aria-label="Fade-Zeit in Sekunden"><button type="button" data-a="f+">+</button></div></div>
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
@@ -2413,7 +2414,31 @@ async function boot(){
   } catch { setSync(); }
 }
 boot();
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+/* ---------- Updates: neue Version erkennen und laden, aber nie mitten in der Musik ---------- */
+let updWaiting = false;
+async function updCheck(){
+  if (!navigator.onLine || location.protocol !== "https:") return;
+  try {
+    const t = await (await fetch("./index.html?v=" + Date.now(), {cache: "no-store"})).text();
+    const m = t.match(/const APP_VERSION = "([^"]+)"/);
+    if (m && m[1] !== APP_VERSION && !updWaiting) { updWaiting = true; updTry(); }
+  } catch {}
+}
+function updTry(){
+  if (!updWaiting) return;
+  const busy = !!player.sid || !!$("#layer").firstChild || (document.activeElement && document.activeElement.closest && document.activeElement.closest("input,textarea"));
+  if (!busy) { location.reload(); return; }
+  toast("Neue Version bereit – sie wird geladen, sobald keine Musik läuft.", 5000);
+}
+setInterval(() => { if (updWaiting) { if (!player.sid && !$("#layer").firstChild) location.reload(); } }, 5000);
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("sw.js", {updateViaCache: "none"}).then(reg => {
+    setInterval(() => { reg.update().catch(() => {}); updCheck(); }, 10 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { reg.update().catch(() => {}); updCheck(); } });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", updCheck);
+  setTimeout(updCheck, 3000);
+}
 })();
 </script>
 
