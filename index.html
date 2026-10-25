@@ -515,7 +515,9 @@ const ACTIONS = [
   ["play","Abspielen / Pause","Space"], ["go","GO: gewählten Titel bzw. Ablaufpunkt starten","Enter"], ["check","Ablaufpunkt abhaken","Shift+Enter"],
   ["down","Auswahl nach unten","ArrowDown"], ["up","Auswahl nach oben","ArrowUp"], ["next","Nächstes Lied","ArrowRight"],
   ["restart","Lied neu starten","ArrowLeft"], ["fade","Fade (Ausblenden)","PageDown"], ["stop","Sofort stoppen","End"],
-  ["tab","Ablauf / Programm wechseln","Tab"], ["fadeUp","Fade-Zeit länger","+"], ["fadeDn","Fade-Zeit kürzer","-"], ["help","Einstellungen und Tasten öffnen","?"]];
+  ["tab","Ablauf / Programm wechseln","Tab"], ["fadeUp","Fade-Zeit länger","+"], ["fadeDn","Fade-Zeit kürzer","-"],
+  ["pUp","Lautstärke Programm lauter","F2"], ["pDn","Lautstärke Programm leiser","F1"], ["eUp","Lautstärke Einwürfe lauter","F4"], ["eDn","Lautstärke Einwürfe leiser","F3"],
+  ["mUp","Gesamtlautstärke lauter","F8"], ["mDn","Gesamtlautstärke leiser","F7"], ["help","Einstellungen und Tasten öffnen","?"]];
 let keymap = Object.assign(Object.fromEntries(ACTIONS.map(a=>[a[0],a[2]])), ls.get("keys", {}));
 const NAMES = {Space:"Leertaste",ArrowUp:"↑",ArrowDown:"↓",ArrowLeft:"←",ArrowRight:"→",PageDown:"Bild ↓",PageUp:"Bild ↑",End:"Ende",Home:"Pos1",Enter:"Enter",Tab:"Tab",Backspace:"⌫",Delete:"Entf",Insert:"Einfg"};
 function keyName(c){ if (!c || c === "none") return ""; const parts = c === "+" ? ["+"] : c.endsWith("++") ? [...c.slice(0,-2).split("+"), "+"] : c.split("+"); return parts.map(x => NAMES[x] || (x.length===1 ? x.toUpperCase() : x)).join(" + "); }
@@ -652,7 +654,7 @@ async function addFiles(files, target){
     else if (target.startsWith("run:")) { const pt = rd(e).find(x => x.k === target.slice(4)); if (pt && !pt.songs.includes(s.id)) pt.songs.push(s.id); }
     else e.pool.push({k: uid("k"), sid: s.id});
   }
-  save(e); render(); uploadLoop();
+  save(e); render(); uploadLoop(); setTimeout(normQueue, 1500);
 }
 $("#fileIn").addEventListener("change", ev2 => { const f = ev2.target.files; if (f && f.length) addFiles(f, addTarget); ev2.target.value = ""; });
 document.querySelectorAll("[data-add]").forEach(b => b.addEventListener("click", () => { if (!ev()) { toast("Lege zuerst eine Veranstaltung an."); openSide(); return; } addTarget = b.dataset.add; $("#fileIn").click(); }));
@@ -942,11 +944,17 @@ let vol = Object.assign({m:1, p:1, e:1}, ls.get("vol", {}));
 let midimap = ls.get("midi", {}); let midiOn = !!ls.get("midiOn", false), midiAcc = null, midiCap = null, midiErr = ""; const ccLast = new Map();  // MIDI-Zustand (früh, weil render() ihn braucht)
 const levels = new Map();          // Deck -> Pegel-Gain (hinter dem Fade-Gain)
 const faderGain = v => v <= 0 ? 0 : v * v;   // Faderweg -> Lautstärke (hörgerechter als linear)
-const lvlOf = d => faderGain(vol.m) * faderGain(d && d._src === "pool" ? vol.e : vol.p);
-let actx = null, gain = null;
+// Einheitliche Lautstärke: jedes Lied wird einmal gemessen (LUFS) und auf einen gemeinsamen Pegel gebracht
+let normOn = ls.get("norm", true);
+const NORM_TARGET = -14, NORM_MAX_BOOST = 9, NORM_V = 1;
+const normDb = s => !s || typeof s.lufs !== "number" || s.lufsV !== NORM_V ? 0 : Math.max(-20, Math.min(NORM_MAX_BOOST, NORM_TARGET - s.lufs));
+const normGain = sid => normOn && sid ? Math.pow(10, normDb(song(sid)) / 20) : 1;
+const lvlOf = d => faderGain(vol.m) * faderGain(d && d._src === "pool" ? vol.e : vol.p) * normGain(d && d._sid);
+let actx = null, gain = null, limiter = null;
 function unlock(){
   if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return; // ohne Klick auf diesem Gerät bliebe der Ton stumm
-  if (!actx) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { actx = new AC(); for (const d of decks) { const node = actx.createMediaElementSource(d); const g = actx.createGain(); const lv = actx.createGain(); lv.gain.value = lvlOf(d); node.connect(g).connect(lv).connect(actx.destination); gains.set(d, g); levels.set(d, lv); } gain = gains.get(decks[0]); } } catch { actx = null; gain = null; gains.clear(); levels.clear(); } }
+  if (!actx) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { actx = new AC(); for (const d of decks) { if (!limiter) { limiter = actx.createDynamicsCompressor(); limiter.threshold.value = -1.5; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = 0.002; limiter.release.value = 0.2; limiter.connect(actx.destination); }
+      const node = actx.createMediaElementSource(d); const g = actx.createGain(); const lv = actx.createGain(); lv.gain.value = lvlOf(d); node.connect(g).connect(lv).connect(limiter); gains.set(d, g); levels.set(d, lv); } gain = gains.get(decks[0]); } } catch { actx = null; gain = null; limiter = null; gains.clear(); levels.clear(); } }
   if (actx && actx.state === "suspended") actx.resume().catch(()=>{});
 }
 function setVol(v, d = au){ const g = gains.get(d); if (g) { if (actx) g.gain.cancelScheduledValues(actx.currentTime); g.gain.value = v; } else { d._fv = v; try { d.volume = Math.max(0, Math.min(1, v * lvlOf(d))); } catch {} } }
@@ -993,7 +1001,7 @@ async function start(e, it, src, opt){
   au._url = player.url = URL.createObjectURL(blob);
   Object.assign(player, {sid:s.id, k:it.k, src, evId:e.id, halted:false, pend:null});
   if (src === "run") selRun = null; if (src === "prog") selProg = null;
-  au._src = src; applyLevels(true);
+  au._src = src; au._sid = s.id; applyLevels(true);
   setVol(xo > 0.25 ? 0 : 1); au.src = player.url;
   try { await au.play(); } catch { toast("Zum Abspielen einmal auf Play tippen."); }
   if (xo > 0.25) rampDeck(au, 1, xo);
@@ -1151,6 +1159,7 @@ function runAction(a, e){
     case "fadeUp": setFade(fadeSec + .5); break;
     case "fadeDn": setFade(fadeSec - .5); break;
     case "help": settingsSheet(); break;
+    case "pUp": case "pDn": case "eUp": case "eDn": case "mUp": case "mDn": volStep(a[0], a.endsWith("Up") ? 1 : -1); break;
   }
   void e;
 }
@@ -1169,7 +1178,7 @@ function hotkeyList(){ return `<dl class="hk">${ACTIONS.map(([id,label]) => `<dt
 function setFade(v){ fadeSec = Math.min(15, Math.max(0.5, Math.round(v*2)/2)); ls.set("fade", fadeSec); renderDeck(); }
 function settingsSheet(){
   const f = v => String(v).replace(".", ",");
-  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25 · MIDI</small></h4>
+  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25c</small></h4>
     <div class="setrow"><span class="lv"><span class="lbl2">Fade-Zeit (FADE-Taste)</span><b id="sFadeV">${f(fadeSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="f-">−</button><input type="range" id="sFade" min="0.5" max="15" step="0.5" value="${fadeSec}" aria-label="Fade-Zeit in Sekunden"><button type="button" data-a="f+">+</button></div></div>
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
@@ -1237,6 +1246,7 @@ document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) { toast("Strg/Alt/Cmd-Kombinationen gehen nicht – der Browser braucht sie."); return; }
     capture(comboOf(e), e); return;
   }
+  { const va = !e.ctrlKey && !e.metaKey && !e.altKey && actionOf(comboOf(e)); if (va && /^[pem](Up|Dn)$/.test(va) && !(e.target.closest && e.target.closest("textarea,select,input:not([type=range])")) && (!$("#layer").firstChild || document.querySelector("#mixSheet"))) { e.preventDefault(); runAction(va, e); return; } }
   if (midiCap && e.key === "Escape") { e.preventDefault(); midiCap = null; const h = document.querySelector("#midiHint"); if (h) h.hidden = true; document.querySelectorAll(".kbtn.wait").forEach(b=>b.classList.remove("wait")); return; }
   if (e.target.closest && e.target.closest("input,textarea,select")) { if (e.key==="Escape") { if ($("#layer").firstChild) closeSheet(); else e.target.blur(); } return; }
   if ($("#layer").firstChild) { if (e.key==="Escape") closeSheet(); return; }
@@ -1581,7 +1591,7 @@ const odPutJson = (path, obj) => odPutBlob(path, new Blob([JSON.stringify(obj)],
 function stateObj(){
   const st = player.evId ? stOf(player.evId) : null;
   return {evId: player.evId || null, sid: player.sid, k: player.k, src: player.src, halted: !!player.halted, pend: player.pend || null, paused: au.paused, t: Math.round((au.currentTime || 0) * 10) / 10, d: Math.round((au.duration || 0) * 10) / 10,
-    auto, fade: fadeSec, xend: xEnd, vol, ready: activated(), lastKey: st?.lastKey || null, lastIdx: st?.lastIdx ?? -1, played: st ? [...st.played].slice(-150) : [], queue: st ? st.queue.slice(0, 30) : []};
+    auto, fade: fadeSec, xend: xEnd, vol, norm: normOn, ready: activated(), lastKey: st?.lastKey || null, lastIdx: st?.lastIdx ?? -1, played: st ? [...st.played].slice(-150) : [], queue: st ? st.queue.slice(0, 30) : []};
 }
 function pushState(force){
   if (R.role !== "player" || !R.peers.size) return;
@@ -1603,6 +1613,7 @@ function execCmd(d){
     case "auto": actAuto(); break;
     case "xend": setXend(d.v); break;
     case "vol": if (["m","p","e"].includes(d.ch)) setLevel(d.ch, +d.v || 0); break;
+    case "norm": setNorm(!!d.v); break;
     case "seek": if (au.duration) au.currentTime = Math.max(0, Math.min(1, +d.f || 0)) * au.duration; break;
     case "prog": _playProg(String(d.k), String(d.ev)); break;
     case "pool": _playNow(String(d.k), String(d.ev)); break;
@@ -2025,6 +2036,8 @@ function cleanTitles(){ for (const s of songs()) { const c = stripId(s.title); i
 /* ---------- Lautstärke-Fenster ---------- */
 const curVol = () => (isRemote() && R.mirror && R.mirror.vol) ? R.mirror.vol : vol;
 const pct = v => Math.round(v * 100) + " %";
+const VOL_STEP = 0.05, VOL_NAMES = {m: "Gesamt", p: "Programm", e: "Einwürfe"};
+function volStep(ch, dir){ const v = Math.max(0, Math.min(1, Math.round((curVol()[ch] + dir * VOL_STEP) * 20) / 20)); setLevel(ch, v); if (!document.querySelector("#mixSheet")) toast(VOL_NAMES[ch] + " " + Math.round(v * 100) + " %", 1200); }
 function renderLevels(){
   const t = $("#lvlTxt"); if (!t) return; const v = curVol();
   const m = midiState(); const dot = m === "off" ? "" : `<i class="mi ${m === "on" ? "on" : ""}" id="midiDot" title="${m === "on" ? "MIDI verbunden: " + esc(midiNames()) : "MIDI: kein Gerät"}"></i>`;
@@ -2032,13 +2045,16 @@ function renderLevels(){
   $("#bMix")?.classList.toggle("on", v.m < 1 || v.p < 1 || v.e < 1);
   const sh = document.querySelector("#mixSheet") ? document : null; if (sh) for (const ch of ["m","p","e"]) { const r = sh.querySelector("#mx_" + ch); if (r && document.activeElement !== r) r.value = Math.round(v[ch] * 100); const b = sh.querySelector("#mxv_" + ch); if (b) b.textContent = pct(v[ch]); }
 }
+const hkPair = ch => { const d = keyName(keymap[ch + "Dn"]), u = keyName(keymap[ch + "Up"]); return d || u ? `${d || "–"} leiser / ${u || "–"} lauter` : ""; };
 function mixSheet(){
   const v = curVol();
   const row = (ch, label, sub) => `<div class="mixrow ${ch}"><span class="ml">${label}<small>${sub}</small></span><input type="range" id="mx_${ch}" min="0" max="100" step="1" value="${Math.round(v[ch]*100)}" aria-label="${label}"><b id="mxv_${ch}">${pct(v[ch])}</b></div>`;
   sheet(`<h4 id="mixSheet">Lautstärke</h4>
-    ${row("m", "Gesamt", midiLabel("volM") || "alles")}
-    ${row("p", "Programm", midiLabel("volP") || "Programm & Ablauf")}
-    ${row("e", "Einwürfe", midiLabel("volE") || "Einwürfe")}
+    ${row("m", "Gesamt", [hkPair("m"), midiLabel("volM")].filter(Boolean).join(" · ") || "alles")}
+    ${row("p", "Programm", [hkPair("p"), midiLabel("volP")].filter(Boolean).join(" · ") || "Programm & Ablauf")}
+    ${row("e", "Einwürfe", [hkPair("e"), midiLabel("volE")].filter(Boolean).join(" · ") || "Einwürfe")}
+    <label class="chkrow"><input type="checkbox" id="normChk" ${curNorm() ? "checked" : ""}> Einheitliche Lautstärke (alle Lieder angleichen)</label>
+    <p id="normStat">${normStatText()}</p>
     <p>Programm und Einwürfe lassen sich getrennt einstellen – z. B. Programm auf 60 % als Hintergrund, Einwürfe auf 100 %, damit sie deutlich herauskommen. Die Regler wirken hörgerecht: 50 % ist schon spürbar leiser. ${midiSupported() ? "Am MIDI-Pad legst du die Fader unter Einstellungen → MIDI-Pad fest." : ""}</p>
     <div class="acts"><button class="sec" data-a="mx100" style="margin-right:auto">Alle auf 100 %</button><button class="pri" data-a="close">Fertig</button></div>`,
   a => {
@@ -2046,9 +2062,68 @@ function mixSheet(){
     if (a==="mx100") { for (const ch of ["m","p","e"]) setLevel(ch, 1); return; }
   }, root => {
     for (const ch of ["m","p","e"]) root.querySelector("#mx_" + ch).addEventListener("input", ev2 => setLevel(ch, +ev2.target.value / 100));
+    root.querySelector("#normChk").addEventListener("change", ev2 => setNorm(ev2.target.checked));
   });
 }
 $("#bMix").addEventListener("click", mixSheet);
+
+
+/* ---------- Einheitliche Lautstärke (Lautheit messen, LUFS nach EBU R128, vereinfacht) ---------- */
+const curNorm = () => (isRemote() && R.mirror && R.mirror.norm != null) ? !!R.mirror.norm : normOn;
+function setNorm(on){
+  if (isRemote()) { send({a:"norm", v: on}); if (R.mirror) R.mirror.norm = on; return; }
+  normOn = on; ls.set("norm", normOn); applyLevels(); renderLevels(); if (normOn) normQueue();
+  clearTimeout(setLevel.t); setLevel.t = setTimeout(() => pushState(true), 120);
+}
+function normStatText(){
+  const all = songs(), done = all.filter(s => typeof s.lufs === "number" && s.lufsV === NORM_V).length, bad = all.filter(s => s.lufsErr === NORM_V).length;
+  const left = all.length - done - bad;
+  if (!all.length) return "Noch keine Lieder.";
+  return `${done} von ${all.length} Liedern gemessen${left ? ` – die übrigen ${left} werden gemessen, sobald nichts läuft und sie auf diesem Gerät liegen` : ""}${bad ? ` · ${bad} ließen sich nicht messen` : ""}. Leise Lieder werden bis zu +${NORM_MAX_BOOST} dB angehoben, laute abgesenkt.`;
+}
+function renderNorm(){ const n = document.querySelector("#normStat"); if (n) n.textContent = normStatText(); }
+async function measureLoudness(blob){
+  const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext; if (!AC) throw new Error("kein OfflineAudioContext");
+  const raw = await blob.arrayBuffer();
+  const dctx = new AC(1, 1, 44100);
+  const ab = await new Promise((res, rej) => { const pr = dctx.decodeAudioData(raw, res, rej); if (pr && pr.then) pr.then(res, rej); });
+  const SR = 16000, len = Math.max(SR, Math.ceil(ab.duration * SR));
+  const oc = new AC(1, len, SR);
+  const src = oc.createBufferSource(); src.buffer = ab;
+  // K-Gewichtung: Höhenanhebung + Hochpass
+  const hs = oc.createBiquadFilter(); hs.type = "highshelf"; hs.frequency.value = 1500; hs.gain.value = 4;
+  const hp = oc.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 38; hp.Q.value = 0.5;
+  src.connect(hs).connect(hp).connect(oc.destination); src.start();
+  const x = (await oc.startRendering()).getChannelData(0);
+  // Blöcke 400 ms, 75 % Überlappung, Gate absolut −70 LUFS und relativ −10 LU
+  const B = Math.round(0.4 * SR), H = Math.round(0.1 * SR), cum = new Float64Array(x.length + 1);
+  for (let i = 0; i < x.length; i++) cum[i + 1] = cum[i] + x[i] * x[i];
+  const ms = []; for (let i = 0; i + B <= x.length; i += H) ms.push((cum[i + B] - cum[i]) / B);
+  if (!ms.length) ms.push(cum[x.length] / Math.max(1, x.length));
+  const L = m => -0.691 + 10 * Math.log10(m || 1e-12);
+  // Stereo wurde zu Mono gemittelt (−3 dB) – ausgleichen, damit die Werte zu üblichen LUFS passen
+  const comp = ab.numberOfChannels > 1 ? 2 : 1;
+  const g1 = ms.filter(m => L(m * comp) > -70); if (!g1.length) return -70;
+  const rel = L(g1.reduce((a, b) => a + b, 0) / g1.length * comp) - 10;
+  const g2 = g1.filter(m => L(m * comp) > rel);
+  return L((g2.length ? g2 : g1).reduce((a, b) => a + b, 0) / (g2.length || g1.length) * comp);
+}
+let normBusy = false;
+async function normQueue(){
+  if (normBusy || isRemote()) return; normBusy = true;
+  try {
+    for (const s of songs()) {
+      if ((typeof s.lufs === "number" && s.lufsV === NORM_V) || s.lufsErr === NORM_V || !audioKeys.has(s.id)) continue;
+      if (player.sid && !au.paused) break;          // während der Show nicht rechnen – später weiter
+      const blob = await audioGet(s.id); if (!blob) continue;
+      try { s.lufs = Math.round(await measureLoudness(blob) * 10) / 10; s.lufsV = NORM_V; delete s.lufsErr; }
+      catch { s.lufsErr = NORM_V; }
+      save(s); renderNorm();
+      await new Promise(r => setTimeout(r, 250));
+    }
+  } finally { normBusy = false; }
+}
+setTimeout(normQueue, 5000); setInterval(normQueue, 45000);
 
 /* ---------- MIDI-Pad (Web MIDI: Edge/Chrome am PC/Laptop) ---------- */
 // Belegung pro Gerät: Aktion -> Code ("n:Kanal:Note", "c:Kanal:CC", "p:Kanal" = Pitch-Fader, "g:Kanal:Programm")
@@ -2107,7 +2182,7 @@ function midiMsg(ev2){
 function midiRun(id){
   const sheetOpen = !!$("#layer").firstChild;
   // Transport geht immer, auch wenn ein Fenster offen ist
-  const transport = ["play","next","restart","fade","stop","auto","fadeUp","fadeDn"];
+  const transport = ["play","next","restart","fade","stop","auto","fadeUp","fadeDn","pUp","pDn","eUp","eDn","mUp","mDn"];
   if (sheetOpen && !transport.includes(id)) { if (id === "mix" || id === "help") closeSheet(); else return; }
   if (id === "auto") { $("#bAuto").click(); return; }
   if (id === "mix") { mixSheet(); return; }
