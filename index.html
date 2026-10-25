@@ -284,6 +284,16 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 .tb.on{border-color:var(--amber);color:var(--amber)}
 .auto{display:flex;align-items:center;gap:6px;font:600 12px/1.1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex-direction:column;border:1px solid var(--line);border-radius:10px;padding:8px 8px;background:transparent;height:52px;justify-content:center}
 .auto.on{color:var(--amber);border-color:var(--amber)}
+.lvl{margin-top:4px;font:500 12px/1.3 var(--f-mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lvl b{font-weight:700;color:var(--fg)} .lvl .lp{color:var(--amber)} .lvl .le{color:var(--cyan)}
+.lvl .mi{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:4px;vertical-align:1px}
+.lvl .mi.on{background:var(--ok)} .lvl .mi.hit{background:var(--amber)}
+.mixrow{display:grid;grid-template-columns:120px minmax(0,1fr) 58px;gap:10px;align-items:center}
+.mixrow input[type=range]{width:100%;accent-color:var(--amber)}
+.mixrow.e input[type=range]{accent-color:var(--cyan)}
+.mixrow b{font:700 16px/1 var(--f-mono);text-align:right}
+.mixrow .ml{font:600 15px/1.1 var(--f-display);letter-spacing:.03em}
+.mixrow small{display:block;color:var(--muted);font:500 11.5px/1.2 var(--f-mono)}
 
 /* Overlay */
 .scrim{position:fixed;inset:0;background:color-mix(in srgb,#000 55%,transparent);display:grid;place-items:end center;z-index:50;padding:16px}
@@ -449,9 +459,10 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
         <button class="tb fade" id="bFade" title="Ausblenden und stoppen (↓)">FADE <span id="fadeLbl" style="font-family:var(--f-mono);font-size:12px;opacity:.75">3s</span></button>
         <button class="tb" id="bStop" title="Stopp" aria-label="Stopp"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
         <button class="auto on" id="bAuto" title="Nach jedem Lied automatisch weiter">Auto<br>weiter</button>
+        <button class="auto" id="bMix" title="Lautstärke: Gesamt, Programm, Einwürfe">Laut-<br>stärke</button>
       </div>
       </div>
-      <div class="dnext"><div class="nx" id="nowNx"></div></div>
+      <div class="dnext"><div class="nx" id="nowNx"></div><div class="lvl" id="lvlTxt"></div></div>
     </div>
   </footer>
 </div>
@@ -865,6 +876,7 @@ function itemMenu(k){
       <button data-a="ren">Titel speichern</button>
       ${inProg ? `<button data-a="stop">${it.stop ? "Nach diesem Lied nicht mehr anhalten" : "Nach diesem Lied anhalten (z. B. vor einer Rede)"}</button>` : ""}
       ${inPool ? `<button data-a="key">Taste ändern (jetzt: ${esc(keyName(poolKeys(e).get(k)) || "keine")}${it.key ? "" : ", automatisch"})</button>` : ""}
+      ${inPool && midiSupported() ? `<button data-a="midi">MIDI-Pad ändern (jetzt: ${esc(midiPoolLabel(e, it))})</button>` : ""}
       ${inPool ? `<button data-a="q">${stOf(e.id).queue.includes(k) ? "Aus „als Nächstes“ nehmen" : "Als Nächstes spielen"}</button>` : ""}
       <button data-a="move">${inProg ? "Zu den Einwürfen verschieben" : "Ans Ende des Programms verschieben"}</button>
       <button data-a="rm" class="danger">${inProg ? "Aus dem Programm entfernen" : "Aus den Einwürfen entfernen"}</button>
@@ -873,6 +885,7 @@ function itemMenu(k){
       if (a==="stop") { it.stop = !it.stop; save(e); render(); return true; }
       if (a==="q") { toggleQueue(k); return true; }
       if (a==="key") { poolKeySheet(e, it, s); return; }
+      if (a==="midi") { midiPoolSheet(e, it, s); return; }
       if (a==="move") { if (inProg) { e.program = e.program.filter(i=>i.k!==k); e.pool.push({k, sid:it.sid}); } else { e.pool = e.pool.filter(i=>i.k!==k); e.program.push({k, sid:it.sid, stop:false}); const st = stOf(e.id); st.queue = st.queue.filter(x=>x!==k); } save(e); render(); return true; }
       if (a==="rm") { e.program = e.program.filter(i=>i.k!==k); e.pool = e.pool.filter(i=>i.k!==k); const st = stOf(e.id); st.queue = st.queue.filter(x=>x!==k); save(e); render(); return true; }
   });
@@ -914,7 +927,7 @@ function sheet(html, onAct, onOpen){
   if (onOpen) onOpen(root);
   const f = root.querySelector("button,input"); if (f && matchMedia("(pointer:fine)").matches) f.focus();
 }
-function closeSheet(){ $("#layer").innerHTML = ""; capture = null; }
+function closeSheet(){ $("#layer").innerHTML = ""; capture = null; midiCap = null; }
 function confirmSheet(title, text, btn, fn){ sheet(`<h4>${esc(title)}</h4><p>${esc(text)}</p><div class="acts"><button class="sec" data-a="no">Abbrechen</button><button class="pri red" data-a="yes">${esc(btn)}</button></div>`, a => { if (a==="yes") fn(); return true; }); }
 let toastT;
 function toast(msg, ms=2600){ let t = $(".toast"); if (!t) { t = document.createElement("div"); t.className = "toast"; t.setAttribute("role","status"); document.body.appendChild(t); } t.textContent = msg; clearTimeout(toastT); toastT = setTimeout(() => t.remove(), ms); }
@@ -924,14 +937,28 @@ const decks = [$("#au"), $("#au2")];
 let au = decks[0];
 const gains = new Map();
 const player = {sid:null, k:null, src:null, evId:null, url:null, halted:false, pend:null};
+// Lautstärken als Faderstellung 0…1: m = Gesamt, p = Programm & Ablauf, e = Einwürfe
+let vol = Object.assign({m:1, p:1, e:1}, ls.get("vol", {}));
+let midimap = ls.get("midi", {}); let midiOn = !!ls.get("midiOn", false), midiAcc = null, midiCap = null, midiErr = ""; const ccLast = new Map();  // MIDI-Zustand (früh, weil render() ihn braucht)
+const levels = new Map();          // Deck -> Pegel-Gain (hinter dem Fade-Gain)
+const faderGain = v => v <= 0 ? 0 : v * v;   // Faderweg -> Lautstärke (hörgerechter als linear)
+const lvlOf = d => faderGain(vol.m) * faderGain(d && d._src === "pool" ? vol.e : vol.p);
 let actx = null, gain = null;
 function unlock(){
   if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return; // ohne Klick auf diesem Gerät bliebe der Ton stumm
-  if (!actx) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { actx = new AC(); for (const d of decks) { const node = actx.createMediaElementSource(d); const g = actx.createGain(); node.connect(g).connect(actx.destination); gains.set(d, g); } gain = gains.get(decks[0]); } } catch { actx = null; gain = null; gains.clear(); } }
+  if (!actx) { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { actx = new AC(); for (const d of decks) { const node = actx.createMediaElementSource(d); const g = actx.createGain(); const lv = actx.createGain(); lv.gain.value = lvlOf(d); node.connect(g).connect(lv).connect(actx.destination); gains.set(d, g); levels.set(d, lv); } gain = gains.get(decks[0]); } } catch { actx = null; gain = null; gains.clear(); levels.clear(); } }
   if (actx && actx.state === "suspended") actx.resume().catch(()=>{});
 }
-function setVol(v, d = au){ const g = gains.get(d); if (g) { if (actx) g.gain.cancelScheduledValues(actx.currentTime); g.gain.value = v; } else { try { d.volume = v; } catch {} } }
-const getVol = (d = au) => { const g = gains.get(d); return g ? g.gain.value : d.volume; };
+function setVol(v, d = au){ const g = gains.get(d); if (g) { if (actx) g.gain.cancelScheduledValues(actx.currentTime); g.gain.value = v; } else { d._fv = v; try { d.volume = Math.max(0, Math.min(1, v * lvlOf(d))); } catch {} } }
+const getVol = (d = au) => { const g = gains.get(d); return g ? g.gain.value : (d._fv ?? 1); };
+function applyLevels(now){ for (const d of decks) { const lv = levels.get(d), v = lvlOf(d);
+  if (lv && actx) { if (now) { lv.gain.cancelScheduledValues(actx.currentTime); lv.gain.value = v; } else lv.gain.setTargetAtTime(v, actx.currentTime, 0.04); }
+  else if (!gains.get(d)) { try { d.volume = Math.max(0, Math.min(1, (d._fv ?? 1) * v)); } catch {} } } }
+function setLevel(ch, v){
+  if (isRemote()) { send({a:"vol", ch, v}); if (R.mirror) { R.mirror.vol = Object.assign({}, R.mirror.vol || vol, {[ch]: v}); } renderLevels(); return; }
+  vol[ch] = Math.max(0, Math.min(1, Math.round(v * 1000) / 1000)); ls.set("vol", vol); applyLevels(); renderLevels();
+  clearTimeout(setLevel.t); setLevel.t = setTimeout(() => pushState(true), 120);
+}
 function fadeOut(sec){ const d = au; return new Promise(res => {
   if (d.paused) return res();
   crossing = true; // während eines Ausblendens keine automatische Überblendung starten
@@ -966,6 +993,7 @@ async function start(e, it, src, opt){
   au._url = player.url = URL.createObjectURL(blob);
   Object.assign(player, {sid:s.id, k:it.k, src, evId:e.id, halted:false, pend:null});
   if (src === "run") selRun = null; if (src === "prog") selProg = null;
+  au._src = src; applyLevels(true);
   setVol(xo > 0.25 ? 0 : 1); au.src = player.url;
   try { await au.play(); } catch { toast("Zum Abspielen einmal auf Play tippen."); }
   if (xo > 0.25) rampDeck(au, 1, xo);
@@ -1044,6 +1072,7 @@ function renderDeck(){
   $("#playIco").innerHTML = playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
   $("#bPlay").setAttribute("aria-label", playing ? "Pause" : "Abspielen");
   $("#bAuto").classList.toggle("on", auto);
+  renderLevels();
   $("#xendBtn").textContent = xendLabel(); $("#xendBtn").classList.toggle("on", xendVal() > 0);
   $("#fadeLbl").textContent = String(isRemote() && R.mirror ? R.mirror.fade : fadeSec).replace(".", ",") + "s";
   if (isRemote() && R.mirror) $("#bAuto").classList.toggle("on", !!R.mirror.auto);
@@ -1140,7 +1169,7 @@ function hotkeyList(){ return `<dl class="hk">${ACTIONS.map(([id,label]) => `<dt
 function setFade(v){ fadeSec = Math.min(15, Math.max(0.5, Math.round(v*2)/2)); ls.set("fade", fadeSec); renderDeck(); }
 function settingsSheet(){
   const f = v => String(v).replace(".", ",");
-  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-24b</small></h4>
+  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25 · MIDI</small></h4>
     <div class="setrow"><span class="lv"><span class="lbl2">Fade-Zeit (FADE-Taste)</span><b id="sFadeV">${f(fadeSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="f-">−</button><input type="range" id="sFade" min="0.5" max="15" step="0.5" value="${fadeSec}" aria-label="Fade-Zeit in Sekunden"><button type="button" data-a="f+">+</button></div></div>
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
@@ -1152,13 +1181,15 @@ function settingsSheet(){
     <p>${dirOk ? `Alles wird zusätzlich im Ordner <b style="color:var(--fg)">„${esc(dirName)}“</b> gespeichert – Veranstaltungen, Abläufe, Einstellungen, Tasten und die Lieder (Unterordner „Lieder“).` : dirHandle ? `Ordner „${esc(dirHandle.name)}“ ist gewählt, aber noch nicht verbunden.` : "Noch kein Ordner gewählt. Die Daten liegen nur in diesem Browser."}</p>
     <div class="acts" style="justify-content:flex-start">${dirHandle && !dirOk ? `<button class="pri" data-a="dirconn">Verbinden</button>` : ""}<button class="${dirOk || dirHandle ? "sec" : "pri"}" data-a="dirpick">${dirHandle ? "Anderen Ordner wählen …" : "Ordner wählen …"}</button>${dirHandle ? `<button class="sec" data-a="dirdrop">Trennen</button>` : ""}</div>` : ""}
     <p>„Wechsel“ heißt: wenn ein Einwurf per Sofort, ein Ablaufpunkt oder Weiter das laufende Lied ablöst. 0 s = harter Schnitt. Ist ein Ordner verbunden, werden Zeiten und Tasten dort mitgespeichert.</p>
+    ${midiSection()}
     <span class="lbl2">Tastenkürzel (PC, iPad mit Tastatur) – zum Ändern auf die Taste tippen</span>
     <p id="capHint" hidden style="color:var(--amber);font-weight:600"></p>
     <div id="hkWrap">${hotkeyList()}</div>
     <div class="acts"><button class="sec" data-a="kreset" style="margin-right:auto">Standard-Tasten</button><button class="pri" data-a="close">Fertig</button></div>`,
   (a, root) => {
-    if (a==="close") { capture = null; return true; }
+    if (a==="close") { capture = null; midiCap = null; return true; }
     if (a==="dirpick") { pickDir(); return true; }
+    if (a.startsWith("midi")) return midiSettingsAct(a, root);
     if (a.startsWith("role:")) { setRole(a.slice(5)); settingsSheet(); return; }
     if (a.startsWith("tgt:")) { R.target = a.slice(4); ls.set("rcTarget", R.target); closeRemote(); remoteConnect(); settingsSheet(); return; }
     if (a==="rcscan") { closeRemote(); remoteConnect().then(() => { if ($("#layer").firstChild) settingsSheet(); }); settingsSheet(); return; }
@@ -1206,6 +1237,7 @@ document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) { toast("Strg/Alt/Cmd-Kombinationen gehen nicht – der Browser braucht sie."); return; }
     capture(comboOf(e), e); return;
   }
+  if (midiCap && e.key === "Escape") { e.preventDefault(); midiCap = null; const h = document.querySelector("#midiHint"); if (h) h.hidden = true; document.querySelectorAll(".kbtn.wait").forEach(b=>b.classList.remove("wait")); return; }
   if (e.target.closest && e.target.closest("input,textarea,select")) { if (e.key==="Escape") { if ($("#layer").firstChild) closeSheet(); else e.target.blur(); } return; }
   if ($("#layer").firstChild) { if (e.key==="Escape") closeSheet(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey || isModifier(e)) return;
@@ -1549,7 +1581,7 @@ const odPutJson = (path, obj) => odPutBlob(path, new Blob([JSON.stringify(obj)],
 function stateObj(){
   const st = player.evId ? stOf(player.evId) : null;
   return {evId: player.evId || null, sid: player.sid, k: player.k, src: player.src, halted: !!player.halted, pend: player.pend || null, paused: au.paused, t: Math.round((au.currentTime || 0) * 10) / 10, d: Math.round((au.duration || 0) * 10) / 10,
-    auto, fade: fadeSec, xend: xEnd, ready: activated(), lastKey: st?.lastKey || null, lastIdx: st?.lastIdx ?? -1, played: st ? [...st.played].slice(-150) : [], queue: st ? st.queue.slice(0, 30) : []};
+    auto, fade: fadeSec, xend: xEnd, vol, ready: activated(), lastKey: st?.lastKey || null, lastIdx: st?.lastIdx ?? -1, played: st ? [...st.played].slice(-150) : [], queue: st ? st.queue.slice(0, 30) : []};
 }
 function pushState(force){
   if (R.role !== "player" || !R.peers.size) return;
@@ -1570,6 +1602,7 @@ function execCmd(d){
     case "fade": actFade(); break;
     case "auto": actAuto(); break;
     case "xend": setXend(d.v); break;
+    case "vol": if (["m","p","e"].includes(d.ch)) setLevel(d.ch, +d.v || 0); break;
     case "seek": if (au.duration) au.currentTime = Math.max(0, Math.min(1, +d.f || 0)) * au.duration; break;
     case "prog": _playProg(String(d.k), String(d.ev)); break;
     case "pool": _playNow(String(d.k), String(d.ev)); break;
@@ -1713,8 +1746,8 @@ function cleanupDeck(d){ if (!d) return; try { d.pause(); } catch {} if (d._url)
 function rampDeck(d, to, sec){ return new Promise(res => {
   const g = gains.get(d);
   if (g && actx) { const now = actx.currentTime; g.gain.cancelScheduledValues(now); g.gain.setValueAtTime(g.gain.value, now); g.gain.linearRampToValueAtTime(to, now + sec); setTimeout(res, sec * 1000 + 30); return; }
-  const from = d.volume, t0 = performance.now();
-  const iv = setInterval(() => { const p = Math.min(1, (performance.now() - t0) / (sec * 1000)); try { d.volume = Math.max(0, Math.min(1, from + (to - from) * p)); } catch {} if (p >= 1) { clearInterval(iv); res(); } }, 40);
+  const from = getVol(d), t0 = performance.now();
+  const iv = setInterval(() => { const p = Math.min(1, (performance.now() - t0) / (sec * 1000)); setVol(Math.max(0, Math.min(1, from + (to - from) * p)), d); if (p >= 1) { clearInterval(iv); res(); } }, 40);
 }); }
 // Was nach dem aktuellen Lied automatisch käme (gleiche Regeln wie am Liedende)
 function autoNextTarget(){
@@ -1988,6 +2021,190 @@ document.addEventListener("click", ev2 => { const b = ev2.target.closest("[data-
 // Kennung aus Dateinamen des Lieder-Ordners („Titel [abc123…]“) nicht im Titel anzeigen
 function stripId(t){ return String(t || "").replace(/\s*\[[a-z0-9]{8,}\]\s*$/i, "").trim(); }
 function cleanTitles(){ for (const s of songs()) { const c = stripId(s.title); if (c && c !== s.title) { s.title = c; save(s); } } }
+
+/* ---------- Lautstärke-Fenster ---------- */
+const curVol = () => (isRemote() && R.mirror && R.mirror.vol) ? R.mirror.vol : vol;
+const pct = v => Math.round(v * 100) + " %";
+function renderLevels(){
+  const t = $("#lvlTxt"); if (!t) return; const v = curVol();
+  const m = midiState(); const dot = m === "off" ? "" : `<i class="mi ${m === "on" ? "on" : ""}" id="midiDot" title="${m === "on" ? "MIDI verbunden: " + esc(midiNames()) : "MIDI: kein Gerät"}"></i>`;
+  t.innerHTML = `${dot}<span>Ges <b>${Math.round(v.m*100)}</b></span> · <span class="lp">Prog <b>${Math.round(v.p*100)}</b></span> · <span class="le">Einw <b>${Math.round(v.e*100)}</b></span>`;
+  $("#bMix")?.classList.toggle("on", v.m < 1 || v.p < 1 || v.e < 1);
+  const sh = document.querySelector("#mixSheet") ? document : null; if (sh) for (const ch of ["m","p","e"]) { const r = sh.querySelector("#mx_" + ch); if (r && document.activeElement !== r) r.value = Math.round(v[ch] * 100); const b = sh.querySelector("#mxv_" + ch); if (b) b.textContent = pct(v[ch]); }
+}
+function mixSheet(){
+  const v = curVol();
+  const row = (ch, label, sub) => `<div class="mixrow ${ch}"><span class="ml">${label}<small>${sub}</small></span><input type="range" id="mx_${ch}" min="0" max="100" step="1" value="${Math.round(v[ch]*100)}" aria-label="${label}"><b id="mxv_${ch}">${pct(v[ch])}</b></div>`;
+  sheet(`<h4 id="mixSheet">Lautstärke</h4>
+    ${row("m", "Gesamt", midiLabel("volM") || "alles")}
+    ${row("p", "Programm", midiLabel("volP") || "Programm & Ablauf")}
+    ${row("e", "Einwürfe", midiLabel("volE") || "Einwürfe")}
+    <p>Programm und Einwürfe lassen sich getrennt einstellen – z. B. Programm auf 60 % als Hintergrund, Einwürfe auf 100 %, damit sie deutlich herauskommen. Die Regler wirken hörgerecht: 50 % ist schon spürbar leiser. ${midiSupported() ? "Am MIDI-Pad legst du die Fader unter Einstellungen → MIDI-Pad fest." : ""}</p>
+    <div class="acts"><button class="sec" data-a="mx100" style="margin-right:auto">Alle auf 100 %</button><button class="pri" data-a="close">Fertig</button></div>`,
+  a => {
+    if (a==="close") return true;
+    if (a==="mx100") { for (const ch of ["m","p","e"]) setLevel(ch, 1); return; }
+  }, root => {
+    for (const ch of ["m","p","e"]) root.querySelector("#mx_" + ch).addEventListener("input", ev2 => setLevel(ch, +ev2.target.value / 100));
+  });
+}
+$("#bMix").addEventListener("click", mixSheet);
+
+/* ---------- MIDI-Pad (Web MIDI: Edge/Chrome am PC/Laptop) ---------- */
+// Belegung pro Gerät: Aktion -> Code ("n:Kanal:Note", "c:Kanal:CC", "p:Kanal" = Pitch-Fader, "g:Kanal:Programm")
+const MIDI_BTNS = [...ACTIONS.filter(a => a[0] !== "help"), ["auto","Auto weiter an/aus"], ["mix","Lautstärke-Fenster öffnen"], ["help","Einstellungen öffnen"]];
+const MIDI_FADERS = [["volM","Gesamtlautstärke","m"], ["volP","Lautstärke Programm & Ablauf","p"], ["volE","Lautstärke Einwürfe","e"]];
+const midiSupported = () => !!navigator.requestMIDIAccess;
+function midiInputs(){ return midiAcc ? [...midiAcc.inputs.values()].filter(i => i.state !== "disconnected") : []; }
+const midiNames = () => midiInputs().map(i => i.name).join(", ");
+const midiState = () => !midiSupported() || !midiOn ? "off" : midiInputs().length ? "on" : "none";
+function midiName(c){
+  if (!c) return "";
+  const [t, ch, n] = c.split(":"); const kn = +ch ? " · K" + (+ch + 1) : "";
+  if (t === "n") return "Pad/Note " + n + kn;
+  if (t === "c") return "Regler CC " + n + kn;
+  if (t === "p") return "Pitch-Fader" + kn;
+  if (t === "g") return "Programm " + n + kn;
+  return c;
+}
+const midiLabel = id => midiName(midimap[id]);
+function midiSaveMap(){ ls.set("midi", midimap); }
+async function midiStart(ask){
+  if (!midiSupported()) return false;
+  try {
+    midiAcc = await navigator.requestMIDIAccess({sysex: false});
+    midiErr = "";
+    const hook = () => { for (const i of midiAcc.inputs.values()) i.onmidimessage = midiMsg; renderLevels(); const ms = document.querySelector("#midiStat"); if (ms) ms.innerHTML = midiStatHtml(); };
+    midiAcc.onstatechange = ev2 => { hook(); if (ev2.port && ev2.port.type === "input" && midiOn) toast(ev2.port.state === "connected" ? "MIDI-Gerät verbunden: " + ev2.port.name : "MIDI-Gerät getrennt: " + ev2.port.name); };
+    hook(); return true;
+  } catch (er) { midiAcc = null; midiErr = "Zugriff auf MIDI wurde nicht erlaubt."; if (ask) toast(midiErr + " In der Adresszeile auf das Schloss-Symbol → MIDI erlauben.", 6000); renderLevels(); return false; }
+}
+function midiStop(){ if (midiAcc) for (const i of midiAcc.inputs.values()) i.onmidimessage = null; midiAcc = null; renderLevels(); }
+function midiFlash(){ const d = document.querySelector("#midiDot"); if (!d) return; d.classList.add("hit"); clearTimeout(midiFlash.t); midiFlash.t = setTimeout(() => d.classList.remove("hit"), 120); }
+// Eine MIDI-Nachricht in {code, kind, val} übersetzen. kind: "press" (Taste gedrückt) oder "value" (Fader/Regler 0…1)
+function midiParse(data){
+  const st = data[0], d1 = data[1] ?? 0, d2 = data[2] ?? 0; if (st >= 0xF0) return null;
+  const t = st & 0xF0, ch = st & 0x0F;
+  if (t === 0x90 && d2 > 0) return {code: `n:${ch}:${d1}`, kind: "press"};
+  if (t === 0x80 || t === 0x90) return {code: `n:${ch}:${d1}`, kind: "release"};
+  if (t === 0xB0) { const code = `c:${ch}:${d1}`, last = ccLast.get(code) ?? 0; ccLast.set(code, d2); return {code, kind: "value", val: d2 / 127, up: d2 >= 64 && last < 64}; }
+  if (t === 0xE0) return {code: `p:${ch}`, kind: "value", val: ((d2 << 7) | d1) / 16383};
+  if (t === 0xC0) return {code: `g:${ch}:${d1}`, kind: "press"};
+  return null;
+}
+function midiMsg(ev2){
+  const m = midiParse(ev2.data); if (!m || m.kind === "release") return;
+  midiFlash();
+  if (midiCap) { if (midiCap(m)) midiCap = null; return; }
+  // Fader / Drehregler
+  if (m.kind === "value") { const f = MIDI_FADERS.find(x => midimap[x[0]] === m.code); if (f) { setLevel(f[2], m.val); return; } }
+  const pressed = m.kind === "press" || (m.kind === "value" && m.up);
+  if (!pressed) return;
+  const b = MIDI_BTNS.find(x => midimap[x[0]] === m.code);
+  if (b) { unlock(); midiRun(b[0]); return; }
+  midiPool(m.code);
+}
+function midiRun(id){
+  const sheetOpen = !!$("#layer").firstChild;
+  // Transport geht immer, auch wenn ein Fenster offen ist
+  const transport = ["play","next","restart","fade","stop","auto","fadeUp","fadeDn"];
+  if (sheetOpen && !transport.includes(id)) { if (id === "mix" || id === "help") closeSheet(); else return; }
+  if (id === "auto") { $("#bAuto").click(); return; }
+  if (id === "mix") { mixSheet(); return; }
+  runAction(id);
+}
+// Einwürfe: eigenes Pad am Einwurf, sonst Pad-Reihe ab „erstem Einwurf-Pad“ in Reihenfolge der Einwürfe
+function midiPoolMap(e){
+  const res = new Map(), used = new Set(Object.entries(midimap).filter(([k, v]) => k !== "poolBase" && v).map(([, v]) => v));
+  e.pool.forEach(it => { if (it.midi && it.midi !== "none" && !used.has(it.midi)) { res.set(it.midi, it.k); used.add(it.midi); } });
+  const base = midimap.poolBase;
+  if (base && base.startsWith("n:")) {
+    const [, ch, n0] = base.split(":"); let n = +n0;
+    for (const it of e.pool) { if (it.midi) continue; while (n < 128 && used.has(`n:${ch}:${n}`)) n++; if (n >= 128) break; res.set(`n:${ch}:${n}`, it.k); used.add(`n:${ch}:${n}`); n++; }
+  }
+  return res;
+}
+function midiPoolLabel(e, it){ for (const [c, k] of midiPoolMap(e)) if (k === it.k) return midiName(c) + (it.midi ? "" : ", automatisch"); return "keins"; }
+function midiPool(code){
+  const e = ev(); if (!e) return;
+  const k = midiPoolMap(e).get(code); if (!k) return;
+  unlock(); playNow(k);
+}
+function midiPoolSheet(e, it, s){
+  sheet(`<h4>MIDI-Pad für „${esc(s.title)}“</h4>
+    <p>${midiState() === "on" ? "Drück jetzt das gewünschte Pad am MIDI-Gerät." : "Kein MIDI-Gerät verbunden. Unter Einstellungen → MIDI-Pad einschalten und Gerät anschließen."}</p>
+    <div style="display:flex;gap:10px;align-items:center"><span class="lbl2">Jetzt:</span><kbd id="mpNow" style="font-size:14px;height:30px;padding:0 10px">${esc(midiPoolLabel(e, it))}</kbd></div>
+    <div class="acts"><button class="sec" data-a="auto" style="margin-right:auto">Automatisch</button><button class="sec" data-a="none">Ohne Pad</button><button class="pri" data-a="close">Fertig</button></div>`,
+  a => {
+    if (a==="auto") { delete it.midi; save(e); render(); return true; }
+    if (a==="none") { it.midi = "none"; save(e); render(); return true; }
+    return true;
+  });
+  midiCap = m => {
+    if (m.kind !== "press" && !(m.kind === "value" && m.up)) return false;
+    const b = [...MIDI_BTNS, ...MIDI_FADERS].find(x => midimap[x[0]] === m.code);
+    if (b) { toast(`${midiName(m.code)} ist schon belegt: ${b[1]}.`); return false; }
+    e.pool.forEach(o => { if (o !== it && o.midi === m.code) delete o.midi; });
+    it.midi = m.code; save(e); render();
+    const n = document.querySelector("#mpNow"); if (n) n.textContent = midiName(m.code);
+    toast(`${midiName(m.code)} gespeichert.`);
+    return false; // weiter lauschen, bis „Fertig“
+  };
+}
+function midiStatHtml(){
+  if (!midiOn) return "MIDI ist aus.";
+  if (midiErr) return esc(midiErr);
+  const ins = midiInputs();
+  return ins.length ? `Verbunden: <b style="color:var(--fg)">${esc(ins.map(i => i.name).join(", "))}</b>` : "Eingeschaltet – aber kein MIDI-Gerät gefunden. Pad per USB anschließen (ggf. vorher den Treiber/die Software des Herstellers schließen).";
+}
+function midiList(){
+  const btn = (id, label) => `<dt><button type="button" class="kbtn" data-a="midil:${id}" title="Neu zuweisen">${midimap[id] ? `<kbd>${esc(midiName(midimap[id]))}</kbd>` : `<span class="lbl2">keine</span>`}</button>${midimap[id] ? `<button type="button" class="kbtn" data-a="midix:${id}" title="Entfernen" style="min-width:0">✕</button>` : ""}</dt><dd>${esc(label)}</dd>`;
+  return `<dl class="hk">${MIDI_FADERS.map(f => btn(f[0], f[1] + " (Fader/Regler)")).join("")}${btn("poolBase", "Erstes Einwurf-Pad – die folgenden Pads spielen die Einwürfe der Reihe nach")}${MIDI_BTNS.map(b => btn(b[0], b[1])).join("")}</dl>`;
+}
+function midiSection(){
+  if (!midiSupported()) return `<span class="lbl2">MIDI-Pad</span><p>Dieser Browser kann kein MIDI (iPhone/iPad/Safari). Am Laptop oder PC mit Edge oder Chrome geht es. Vom iPad aus steuerst du dann über die Fernbedienung.</p>`;
+  return `<span class="lbl2">MIDI-Pad (Edge/Chrome am PC) – zum Zuweisen antippen, dann Pad/Fader am Gerät bewegen</span>
+    <label class="chkrow"><input type="checkbox" id="midiOnChk" ${midiOn ? "checked" : ""}> MIDI-Steuerung einschalten</label>
+    <p id="midiStat">${midiStatHtml()}</p>
+    ${midiOn ? `<p id="midiHint" hidden style="color:var(--amber);font-weight:600"></p>
+    <div id="midiWrap">${midiList()}</div>
+    <p>Tipp: Nach dem Öffnen der App einmal irgendwo hinklicken – erst dann darf der Browser Ton abspielen. Die Belegung gilt für dieses Gerät.</p>
+    <div class="acts" style="justify-content:flex-start"><button class="sec" data-a="midiclear">MIDI-Belegung löschen</button></div>` : ""}`;
+}
+function midiSettingsAct(a, root){
+  const refresh = () => { const w = root.querySelector("#midiWrap"); if (w) w.innerHTML = midiList(); };
+  const hint = root.querySelector("#midiHint");
+  if (a === "midiclear") { confirmSheet("MIDI-Belegung löschen?", "Alle Pads und Fader sind danach nicht mehr zugewiesen.", "Löschen", () => { midimap = {}; midiSaveMap(); settingsSheet(); }); return; }
+  if (a.startsWith("midix:")) { delete midimap[a.slice(6)]; midiSaveMap(); refresh(); render(); return; }
+  if (a.startsWith("midil:")) {
+    const id = a.slice(6), fader = MIDI_FADERS.find(f => f[0] === id), btn = MIDI_BTNS.find(b => b[0] === id);
+    const label = fader ? fader[1] : btn ? btn[1] : "Erstes Einwurf-Pad";
+    if (midiState() !== "on") { toast("Kein MIDI-Gerät verbunden."); return; }
+    root.querySelectorAll(".kbtn").forEach(b => b.classList.toggle("wait", b.dataset.a === a));
+    if (hint) { hint.hidden = false; hint.textContent = fader ? `Bewege jetzt den Fader/Regler für „${label}“ … (Esc = abbrechen)` : `Drück jetzt das Pad/die Taste für „${label}“ … (Esc = abbrechen)`; }
+    midiCap = m => {
+      if (fader) { if (m.kind !== "value") { toast("Das war eine Taste – bitte einen Fader oder Drehregler bewegen."); return false; } }
+      else if (id === "poolBase") { if (!m.code.startsWith("n:") || m.kind !== "press") { toast("Bitte ein Pad drücken, das eine Note sendet."); return false; } }
+      else if (!(m.kind === "press" || (m.kind === "value" && m.up))) return false;
+      for (const k of Object.keys(midimap)) if (k !== id && midimap[k] === m.code) { const o = [...MIDI_BTNS, ...MIDI_FADERS].find(x => x[0] === k); toast(`${midiName(m.code)} war für „${o ? o[1] : "Erstes Einwurf-Pad"}“ belegt – dort jetzt entfernt.`, 4000); delete midimap[k]; }
+      midimap[id] = m.code; midiSaveMap();
+      if (hint) hint.hidden = true; refresh(); render();
+      return true;
+    };
+    return;
+  }
+}
+// Schalter in den Einstellungen
+document.addEventListener("change", async ev2 => {
+  if (ev2.target && ev2.target.id === "midiOnChk") {
+    midiOn = ev2.target.checked; ls.set("midiOn", midiOn);
+    if (midiOn) { const ok = await midiStart(true); if (ok) toast(midiInputs().length ? "MIDI an: " + midiNames() : "MIDI an – noch kein Gerät gefunden."); }
+    else midiStop();
+    if ($("#layer").firstChild && document.querySelector("#midiOnChk")) settingsSheet();
+  }
+});
+if (midiOn && midiSupported()) midiStart(false);
+
 async function boot(){
   try { idb = await idbOpen(); for (const r of await iGetAll("recs")) recs.set(r.id, r); for (const k of await iKeys("audio")) audioKeys.add(k); }
   catch { idb = null; toast("Dieser Browser speichert nichts dauerhaft (privates Fenster?)."); }
