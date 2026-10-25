@@ -245,6 +245,13 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 .qs li small .w{color:var(--amber)} .qs li small .w.e{color:var(--cyan)}
 .qs .grp{display:block;padding:10px 8px 2px;font:700 12px/1 var(--f-display);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 .qs .btns{display:flex;gap:6px}
+.qsbox{position:relative;flex:0 1 300px;min-width:150px}
+.qsbox input{width:100%;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--raise);padding:0 12px;font-size:15px}
+.qsbox input:focus{border-color:var(--amber);outline:none}
+.qspop{position:absolute;top:calc(100% + 6px);right:0;width:min(560px,94vw);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:45;padding:6px}
+@media (max-width:720px){.qspop{left:0;right:auto;width:100%}}
+.qspop .qs{max-height:min(60vh,520px)}
+.qshint{margin:4px 8px 4px;color:var(--muted);font-size:12.5px}
 .libbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .filter{width:100%;margin:0 0 4px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--raise)}
 .filterwrap{padding:8px 10px 0}
@@ -335,6 +342,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 /* Handy: drei Tabs */
 @media (max-width:720px){
   .top{flex-wrap:wrap}
+  .qsbox{order:5;flex:1 1 100%}
   .brand{order:-1;width:100%;justify-content:center;padding-bottom:6px;border-bottom:1px solid var(--line)}
   .brand .logo{height:52px}
   .brand .bname{display:none}
@@ -386,7 +394,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
     </button>
     <button class="chip" id="rc" hidden style="background:transparent;cursor:pointer" title="Fernbedienung"><i></i><span class="lbl">Player</span></button>
     <button class="chip" id="sync" title="Speicherort" style="background:transparent;cursor:pointer"><i></i><span class="lbl">Lokal</span></button>
-    <button class="ghost" id="qsBtn" title="Lied suchen und spontan spielen (F9)" aria-label="Lied suchen">⌕ <span class="libtxt">Suchen</span></button>
+    <div class="qsbox"><input id="qsTop" type="search" placeholder="⌕  Lied suchen …" autocomplete="off" aria-label="Lied suchen und spontan spielen (F9)" title="Lied suchen und spontan spielen (F9) – Enter: sofort, Shift+Enter: als Nächstes"><div class="qspop" id="qsPop" hidden><ul class="qs" id="qsTopL"></ul><p class="qshint">Enter = sofort spielen · Shift+Enter = als Nächstes · Esc = schließen. Das Programm läuft danach an derselben Stelle weiter.</p></div></div>
     <button class="ghost" id="libBtn"><span class="libtxt">Bibliothek</span><span class="hbtn" aria-label="Bibliothek">♫</span></button>
     <button class="ghost" id="setBtn" aria-label="Einstellungen und Tasten" title="Einstellungen und Tasten (?)">⚙</button>
   </header>
@@ -510,6 +518,8 @@ const iDel = (s,k) => tx(s, "readwrite", st => st.delete(k));
 async function audioGet(id){ if (idb) { try { return await iGet("audio", id); } catch {} } return memAudio.get(id); }
 async function audioPut(id, blob){ memAudio.set(id, blob); if (idb) { try { await iPut("audio", blob, id); memAudio.delete(id); } catch {} } audioKeys.add(id); }
 const hasAudio = id => audioKeys.has(id) || (dirOk && songFiles.has(id));
+// Spielbar = Lied existiert, ist nicht gelöscht und liegt hier oder in OneDrive (auf der Fernbedienung zählt nur „nicht gelöscht“)
+function playable(sid){ const s = recs.get(sid); if (!s || s.kind !== "song" || s.deleted) return false; return (typeof isRemote === "function" && isRemote()) || hasAudio(sid) || !!s.asset || !!s.od; }
 async function audioDel(id){ memAudio.delete(id); audioKeys.delete(id); if (idb) { try { await iDel("audio", id); } catch {} } }
 
 /* ---------- Daten ---------- */
@@ -544,9 +554,10 @@ const actionOf = c => ACTIONS.find(a => keymap[a[0]] === c)?.[0] || null;
 // Tasten der Einwürfe: eigene Taste am Einwurf, sonst automatisch nach Position (ohne die Steuertasten)
 function poolKeys(e){
   const res = new Map(), used = new Set(Object.values(keymap).filter(Boolean));
-  e.pool.forEach(it => { if (it.key === "none") res.set(it.k, ""); else if (it.key && !used.has(it.key)) { res.set(it.k, it.key); used.add(it.key); } });
+  const pool = e.pool.filter(it => playable(it.sid));
+  pool.forEach(it => { if (it.key === "none") res.set(it.k, ""); else if (it.key && !used.has(it.key)) { res.set(it.k, it.key); used.add(it.key); } });
   let j = 0;
-  e.pool.forEach(it => { if (res.has(it.k)) return; while (j < POOL_KEYS.length && used.has(POOL_KEYS[j])) j++; if (j < POOL_KEYS.length) { res.set(it.k, POOL_KEYS[j]); used.add(POOL_KEYS[j]); j++; } });
+  pool.forEach(it => { if (res.has(it.k)) return; while (j < POOL_KEYS.length && used.has(POOL_KEYS[j])) j++; if (j < POOL_KEYS.length) { res.set(it.k, POOL_KEYS[j]); used.add(POOL_KEYS[j]); j++; } });
   return res;
 }
 let capture = null; // wartet auf Tastendruck beim Ändern
@@ -577,11 +588,21 @@ async function flush(){
   } finally { flushing = false; ls.set("dirty",[...dirty]); setSync(); }
   if (dirty.size) setTimeout(flush, progress ? 300 : 20000);
 }
+function purgeDeleted(){
+  const dead = new Set([...recs.values()].filter(r => r.kind === "song" && r.deleted).map(r => r.id)); if (!dead.size) return;
+  for (const e of [...recs.values()]) { if (e.kind !== "event" || e.deleted) continue;
+    const a = e.program.length, b = e.pool.length, c = JSON.stringify(e.rundown || []);
+    e.program = e.program.filter(i => !dead.has(i.sid)); e.pool = e.pool.filter(i => !dead.has(i.sid));
+    (e.rundown || []).forEach(p => p.songs = p.songs.filter(x => !dead.has(x)));
+    if (e.program.length !== a || e.pool.length !== b || JSON.stringify(e.rundown || []) !== c) save(e); }
+  for (const st of evState.values()) st.queue = st.queue.filter(k => !(k.startsWith("x:") && dead.has(k.slice(2))));
+}
+let purgeT; const purgeSoon = () => { clearTimeout(purgeT); purgeT = setTimeout(() => { purgeDeleted(); render(); }, 400); };
 function mergeRemote(d){
   if (!d || !d.id || !d.kind) return false;
   const l = recs.get(d.id);
   if (l && (l.updated||0) >= (d.updated||0)) return false;
-  const c = JSON.parse(JSON.stringify(d)); recs.set(c.id, c); if (idb) iPut("recs", c).catch(()=>{}); dirty.delete(c.id); return true;
+  const c = JSON.parse(JSON.stringify(d)); recs.set(c.id, c); if (idb) iPut("recs", c).catch(()=>{}); dirty.delete(c.id); if (c.kind === "song" && c.deleted || c.kind === "event") purgeSoon(); return true;
 }
 function setSync(){
   const el = $("#sync"), lbl = el.querySelector(".lbl"); let cls = "", txt;
@@ -748,7 +769,7 @@ function renderRun(){
   L.innerHTML = pts.map(p => {
     const live = player.src === "run" && player.k === p.k;
     const cls = [p.done ? "done" : "", live ? "live" : (p === np ? "nowpt" : ""), selRun===p.k ? "sel" : ""].join(" ");
-    const chips = p.songs.map(sid => { const s = song(sid); if (!s || s.deleted) return "";
+    const chips = p.songs.map(sid => { const s = song(sid); if (!playable(sid)) return "";
       const miss = !isRemote() && !hasAudio(sid) && !s.asset && !s.od;
       return `<button class="sc ${live && player.sid===sid ? "playing" : ""} ${miss ? "miss" : ""}" data-rplay="${p.k}|${sid}" title="${miss ? "Datei fehlt auf diesem Gerät" : "Jetzt spielen"}"><span class="pl">${icoPlay}</span><span class="st">${esc(s.title)}</span><span class="du">${fmt(s.dur)}</span></button>`; }).join("");
     return `<li class="rd ${cls}" data-k="${p.k}"><span class="h" aria-hidden="true">⋮⋮</span><span class="tm">${esc(p.time || "––:––")}</span>
@@ -791,10 +812,11 @@ function renderProg(){
   const e = ev(), L = $("#progList");
   if (!e) { L.innerHTML = `<li class="empty"><b>So funktioniert's:</b><br>1. Veranstaltung anlegen<br>2. Lieder ins Programm laden und per Griff ⋮⋮ sortieren<br>3. Einwürfe daneben bereitlegen – mit „Sofort“ oder „Als Nächstes“ jederzeit dazwischen spielen</li>`; $("#progSum").textContent=""; return; }
   const st = stOf(e.id), nextIdx = progNextIdx(e);
-  const tot = e.program.reduce((a,i)=>a+(song(i.sid)?.dur||0),0);
-  $("#progSum").textContent = `${e.program.length} Titel · ${fmt(tot)}`;
-  if (!e.program.length) { L.innerHTML = `<li class="empty"><b>Das Programm ist leer.</b><br>Tippe auf „+ Dateien“ oder zieh MP3s hierher. Die Reihenfolge änderst du am Griff ⋮⋮ links.</li>`; return; }
-  L.innerHTML = e.program.map((it, i) => { const s = song(it.sid); if (!s) return "";
+  const vis = e.program.filter(i => playable(i.sid));
+  const tot = vis.reduce((a,i)=>a+(song(i.sid)?.dur||0),0);
+  $("#progSum").textContent = `${vis.length} Titel · ${fmt(tot)}`;
+  if (!vis.length) { L.innerHTML = `<li class="empty"><b>Das Programm ist leer.</b><br>Tippe auf „+ Dateien“ oder zieh MP3s hierher. Die Reihenfolge änderst du am Griff ⋮⋮ links.</li>`; return; }
+  L.innerHTML = e.program.map((it, i) => { const s = song(it.sid); if (!playable(it.sid)) return "";
     const cls = [player.k===it.k ? "cur" : "", st.played.has(it.k) && player.k!==it.k ? "played" : "", i===nextIdx && player.k!==it.k ? "next" : "", selProg===it.k ? "sel" : ""].join(" ");
     return `<li class="row ${cls}" data-k="${it.k}"><span class="h" aria-hidden="true">⋮⋮</span><span class="cue">${String(i+1).padStart(2,"0")}</span>
       <span class="ti"><b>${esc(s.title)}</b><small>${fmt(s.dur)}${it.stop?'<span class="tag stop">danach Pause</span>':""}${metaTags(s)}</small></span>
@@ -837,9 +859,9 @@ function renderPool(){
   $("#poolFilterWrap").hidden = !(e && e.pool.length > 8);
   if (!e) { L.innerHTML = ""; $("#poolSum").textContent=""; return; }
   const st = stOf(e.id), pk = poolKeys(e);
-  $("#poolSum").textContent = `${e.pool.length} Titel`;
-  if (!e.pool.length) { L.innerHTML = `<li class="empty"><b>Noch keine Einwürfe.</b><br>Hier liegen Lieder für spontane Momente – Tusch, Einzug, Gewinnermusik. Sie unterbrechen das Programm nicht dauerhaft: danach geht es dort weiter, wo du warst.</li>`; return; }
-  L.innerHTML = e.pool.map(it => { const s = song(it.sid); if (!s) return "";
+  $("#poolSum").textContent = `${e.pool.filter(i => playable(i.sid)).length} Titel`;
+  if (!e.pool.some(i => playable(i.sid))) { L.innerHTML = `<li class="empty"><b>Noch keine Einwürfe.</b><br>Hier liegen Lieder für spontane Momente – Tusch, Einzug, Gewinnermusik. Sie unterbrechen das Programm nicht dauerhaft: danach geht es dort weiter, wo du warst.</li>`; return; }
+  L.innerHTML = e.pool.map(it => { const s = song(it.sid); if (!playable(it.sid)) return "";
     const hide = poolFilter && !s.title.toLowerCase().includes(poolFilter);
     const qi = st.queue.indexOf(it.k);
     return `<li class="row ${player.k===it.k?"curpool":""}" data-k="${it.k}" ${hide?"hidden":""}><span class="h" aria-hidden="true">⋮⋮</span><span class="cue">${pk.get(it.k) ? `<span class="kbd" title="Taste ${esc(keyName(pk.get(it.k)))}: sofort · mit Shift: danach">${esc(keyName(pk.get(it.k)))}</span>` : `<span style="color:var(--cyan)">E</span>`}</span>
@@ -1001,9 +1023,9 @@ function nextUp(){
   const st = stOf(e.id);
   // Nach Anhalten innerhalb eines Programmpunkts: zuerst das nächste Lied dieses Punkts
   const pd = player.halted && player.pend;
-  if (pd) { const pe = evById(pd.evId); const pp = pe && rd(pe).find(x => x.k === pd.k); if (pp && pp.songs.includes(pd.sid) && song(pd.sid) && !song(pd.sid).deleted) return {e: pe, it: {k: pp.k, sid: pd.sid}, src: "run"}; }
-  while (st.queue.length) { const k = st.queue[0]; if (k.startsWith("x:")) { const sid = k.slice(2); if (song(sid) && !song(sid).deleted) return {e, it: {k, sid}, src:"pool"}; st.queue.shift(); continue; } const it = e.pool.find(i=>i.k===k); if (it) return {e, it, src:"pool"}; st.queue.shift(); }
-  const i = progNextIdx(e); if (i < e.program.length) return {e, it: e.program[i], src:"prog"};
+  if (pd) { const pe = evById(pd.evId); const pp = pe && rd(pe).find(x => x.k === pd.k); if (pp && pp.songs.includes(pd.sid) && playable(pd.sid)) return {e: pe, it: {k: pp.k, sid: pd.sid}, src: "run"}; }
+  while (st.queue.length) { const k = st.queue[0]; if (k.startsWith("x:")) { const sid = k.slice(2); if (playable(sid)) return {e, it: {k, sid}, src:"pool"}; st.queue.shift(); continue; } const it = e.pool.find(i=>i.k===k); if (it && playable(it.sid)) return {e, it, src:"pool"}; st.queue.shift(); }
+  for (let i = progNextIdx(e); i < e.program.length; i++) if (playable(e.program[i].sid)) return {e, it: e.program[i], src:"prog"};
   return null;
 }
 async function start(e, it, src, opt){
@@ -1051,7 +1073,7 @@ const onEnded = ev0 => {
   const e = recs.get(player.evId);
   if (e && player.src === "run") {
     const p = rd(e).find(x=>x.k===player.k);
-    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i+1).find(id => song(id) && !song(id).deleted);
+    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i+1).find(id => playable(id));
       if (nx && p.stop) { Object.assign(player, {sid:null, k:null, src:null, halted:true, pend:{evId: e.id, k: p.k, sid: nx}}); render(); toast("Angehalten. Play startet „" + song(nx).title + "“."); return; }
       if (nx) { start(e, {k: p.k, sid: nx}, "run"); return; }
       if (p.stop) { Object.assign(player, {sid:null, k:null, src:null, halted:true}); render(); toast("„" + p.title + "“ – Musik zu Ende."); return; } }
@@ -1204,7 +1226,7 @@ function hotkeyList(){ return `<dl class="hk">${ACTIONS.map(([id,label]) => `<dt
 function setFade(v){ fadeSec = Math.min(15, Math.max(0.5, Math.round(v*2)/2)); ls.set("fade", fadeSec); renderDeck(); }
 function settingsSheet(){
   const f = v => String(v).replace(".", ",");
-  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25d</small></h4>
+  sheet(`<h4>Einstellungen <small style="font:500 12px var(--f-mono);color:var(--muted);letter-spacing:0">Version 2026-10-25e</small></h4>
     <div class="setrow"><span class="lv"><span class="lbl2">Fade-Zeit (FADE-Taste)</span><b id="sFadeV">${f(fadeSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="f-">−</button><input type="range" id="sFade" min="0.5" max="15" step="0.5" value="${fadeSec}" aria-label="Fade-Zeit in Sekunden"><button type="button" data-a="f+">+</button></div></div>
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
@@ -1793,7 +1815,7 @@ function autoNextTarget(){
   const e = recs.get(player.evId);
   if (e && player.src === "run") {
     const p = rd(e).find(x => x.k === player.k);
-    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i + 1).find(id => song(id) && !song(id).deleted); if (p.stop) return null; if (nx) return {e, it: {k: p.k, sid: nx}, src: "run"}; }
+    if (p) { const i = p.songs.indexOf(player.sid); const nx = p.songs.slice(i + 1).find(id => playable(id)); if (p.stop) return null; if (nx) return {e, it: {k: p.k, sid: nx}, src: "run"}; }
     return auto ? nextUp() : null;
   }
   const it = e && player.src === "prog" ? e.program.find(i => i.k === player.k) : null;
@@ -2097,43 +2119,49 @@ $("#bMix").addEventListener("click", mixSheet);
 
 
 
-/* ---------- Schnellsuche: Lied finden und spontan spielen ---------- */
-function quickSearch(){
-  const e = ev(); if (!e) { toast("Lege zuerst eine Veranstaltung an."); openSide(); return; }
-  sheet(`<h4>Lied suchen</h4>
-    <input class="filter" id="qsIn" type="search" placeholder="Titel eingeben … (Enter = sofort spielen, Shift+Enter = als Nächstes)" autocomplete="off">
-    <ul class="qs" id="qsL"></ul>
-    <p>„Sofort“ blendet das laufende Lied aus und spielt das gesuchte. „Danach“ spielt es als Nächstes. Anschließend läuft das Programm normal weiter, und die Position im Programm bleibt erhalten.</p>
-    <div class="acts"><button class="pri" data-a="close">Fertig</button></div>`,
-  (a) => {
-    if (a==="close") return true;
-    if (a.startsWith("qp:")) { unlock(); playX(a.slice(3)); return true; }
-    if (a.startsWith("qn:")) { queueX(a.slice(3)); const s2 = song(a.slice(3)); toast("„" + (s2 ? s2.title : "") + "“ kommt als Nächstes."); return true; }
-  }, root => {
-    const inp = root.querySelector("#qsIn"), L = root.querySelector("#qsL");
-    const where = new Map();
-    e.program.forEach((it, i) => { if (!where.has(it.sid)) where.set(it.sid, `<span class="w">Programm ${i + 1}</span>`); });
-    rd(e).forEach(p => p.songs.forEach(sid => { if (!where.has(sid)) where.set(sid, `<span class="w">Ablauf: ${esc((p.time ? p.time + " " : "") + p.title)}</span>`); }));
-    e.pool.forEach(it => { if (!where.has(it.sid)) where.set(it.sid, `<span class="w e">Einwurf</span>`); });
-    const row = (s2, i) => `<li class="${i === 0 ? "first" : ""}"><span style="min-width:0"><b>${esc(s2.title)}</b><small>${fmt(s2.dur)}${where.has(s2.id) ? " · " + where.get(s2.id) : ""}</small></span><span class="btns"><button class="txtb now" data-a="qp:${s2.id}">Sofort</button><button class="txtb" data-a="qn:${s2.id}">Danach</button></span></li>`;
-    let first = null;
-    const draw = () => {
-      const q = normT(inp.value.trim());
-      const match = s2 => !q || normT(s2.title).includes(q) || normT(s2.fname).includes(q);
-      const mine = songs().filter(s2 => where.has(s2.id) && match(s2));
-      const rest = q ? songs().filter(s2 => !where.has(s2.id) && match(s2)).slice(0, 30) : [];
-      first = mine[0] || rest[0] || null;
-      L.innerHTML = (mine.length ? `<li class="grp">In dieser Veranstaltung</li>` + mine.map(row).join("") : (q ? `<li class="grp">In dieser Veranstaltung nichts gefunden</li>` : ""))
-        + (rest.length ? `<li class="grp">Weitere aus der Bibliothek</li>` + rest.map((s2, i) => row(s2, mine.length ? 1 : i)).join("") : "");
-    };
-    inp.addEventListener("input", draw);
-    inp.addEventListener("keydown", ev2 => {
-      if (ev2.key === "Enter" && first) { ev2.preventDefault(); if (ev2.shiftKey) { queueX(first.id); toast("„" + first.title + "“ kommt als Nächstes."); } else { unlock(); playX(first.id); } closeSheet(); }
-    });
-    draw(); setTimeout(() => inp.focus(), 30);
-  });
+/* ---------- Schnellsuche oben in der Kopfzeile: Lied finden und spontan spielen ---------- */
+let qsFirst = null;
+function qsWhere(e){
+  const where = new Map();
+  e.program.forEach((it, i) => { if (!where.has(it.sid)) where.set(it.sid, `<span class="w">Programm ${i + 1}</span>`); });
+  rd(e).forEach(p => p.songs.forEach(sid => { if (!where.has(sid)) where.set(sid, `<span class="w">Ablauf: ${esc((p.time ? p.time + " " : "") + p.title)}</span>`); }));
+  e.pool.forEach(it => { if (!where.has(it.sid)) where.set(it.sid, `<span class="w e">Einwurf</span>`); });
+  return where;
 }
-$("#qsBtn").addEventListener("click", quickSearch);
+function qsDraw(){
+  const inp = $("#qsTop"), pop = $("#qsPop"), L = $("#qsTopL"), e = ev();
+  const raw = inp.value.trim(), q = normT(raw);
+  if (!e) { L.innerHTML = `<li class="grp">Zuerst eine Veranstaltung anlegen</li>`; qsFirst = null; pop.hidden = false; return; }
+  const where = qsWhere(e);
+  const match = s2 => !q || normT(s2.title).includes(q) || normT(s2.fname).includes(q);
+  const all = songs().filter(s2 => playable(s2.id) && match(s2));
+  const mine = all.filter(s2 => where.has(s2.id)).slice(0, q ? 40 : 15), rest = q ? all.filter(s2 => !where.has(s2.id)).slice(0, 25) : [];
+  qsFirst = mine[0] || rest[0] || null;
+  const row = s2 => `<li class="${s2 === qsFirst ? "first" : ""}"><span style="min-width:0"><b>${esc(s2.title)}</b><small>${fmt(s2.dur)}${where.has(s2.id) ? " · " + where.get(s2.id) : ""}</small></span><span class="btns"><button class="txtb now" data-qp="${s2.id}">Sofort</button><button class="txtb" data-qn="${s2.id}">Danach</button></span></li>`;
+  L.innerHTML = (mine.length ? `<li class="grp">${q ? "In dieser Veranstaltung" : "In dieser Veranstaltung – tippen zum Suchen"}</li>` + mine.map(row).join("") : (q ? `<li class="grp">In dieser Veranstaltung nichts gefunden</li>` : `<li class="grp">Noch keine Lieder in dieser Veranstaltung</li>`))
+    + (rest.length ? `<li class="grp">Weitere aus der Bibliothek</li>` + rest.map(row).join("") : "")
+    + (q && !mine.length && !rest.length ? `<li class="grp">Kein Lied passt zu „${esc(raw)}“</li>` : "");
+  pop.hidden = false;
+}
+function qsClose(clear){ const inp = $("#qsTop"); $("#qsPop").hidden = true; if (clear) inp.value = ""; }
+function qsPick(sid, next){
+  const s2 = song(sid); if (!s2) return;
+  if (next) { queueX(sid); toast("„" + s2.title + "“ kommt als Nächstes."); } else { unlock(); playX(sid); }
+  qsClose(true); $("#qsTop").blur();
+}
+function quickSearch(){ const inp = $("#qsTop"); inp.focus(); inp.select(); qsDraw(); }
+$("#qsTop").addEventListener("input", qsDraw);
+$("#qsTop").addEventListener("focus", qsDraw);
+$("#qsTop").addEventListener("keydown", ev2 => {
+  if (ev2.key === "Escape") { ev2.preventDefault(); qsClose(true); ev2.target.blur(); return; }
+  if (ev2.key === "Enter") { ev2.preventDefault(); if (qsFirst) qsPick(qsFirst.id, ev2.shiftKey); return; }
+});
+$("#qsPop").addEventListener("mousedown", ev2 => ev2.preventDefault()); // Fokus im Suchfeld behalten
+$("#qsPop").addEventListener("click", ev2 => {
+  const b = ev2.target.closest("[data-qp],[data-qn]"); if (!b) return;
+  qsPick(b.dataset.qp || b.dataset.qn, !!b.dataset.qn);
+});
+document.addEventListener("pointerdown", ev2 => { if (!ev2.target.closest || !ev2.target.closest(".qsbox")) qsClose(false); });
 
 /* ---------- Einheitliche Lautstärke (Lautheit messen, LUFS nach EBU R128, vereinfacht) ---------- */
 const curNorm = () => (isRemote() && R.mirror && R.mirror.norm != null) ? !!R.mirror.norm : normOn;
@@ -2262,7 +2290,7 @@ function midiPoolMap(e){
   const base = midimap.poolBase;
   if (base && base.startsWith("n:")) {
     const [, ch, n0] = base.split(":"); let n = +n0;
-    for (const it of e.pool) { if (it.midi) continue; while (n < 128 && used.has(`n:${ch}:${n}`)) n++; if (n >= 128) break; res.set(`n:${ch}:${n}`, it.k); used.add(`n:${ch}:${n}`); n++; }
+    for (const it of e.pool.filter(x => playable(x.sid))) { if (it.midi) continue; while (n < 128 && used.has(`n:${ch}:${n}`)) n++; if (n >= 128) break; res.set(`n:${ch}:${n}`, it.k); used.add(`n:${ch}:${n}`); n++; }
   }
   return res;
 }
@@ -2351,7 +2379,7 @@ async function boot(){
   try { idb = await idbOpen(); for (const r of await iGetAll("recs")) recs.set(r.id, r); for (const k of await iKeys("audio")) audioKeys.add(k); }
   catch { idb = null; toast("Dieser Browser speichert nichts dauerhaft (privates Fenster?)."); }
   try { navigator.storage?.persist?.(); } catch {}
-  cleanTitles();
+  cleanTitles(); purgeDeleted();
   if (!ev()) { curEv = events()[0]?.id || null; }
   render();
   const red = await auth.handleRedirect();
