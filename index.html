@@ -1499,9 +1499,13 @@ const cloud = {
   ready(){ return !!this.kind(); },
   async getJson(p){ // -> {data, etag, mtime} oder null
     if (nc.on()) {
+      const i = await nc.req("PROPFIND", p, {headers: {Depth: "0", "Content-Type": "application/xml"}, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>'});
+      if (i.status === 404) return null;
+      const et = ((await i.text()).match(/<d:getetag>([^<]*)<\/d:getetag>/) || [])[1];
+      const etag = et ? et.replace(/&quot;/g, '"').replace(/^W\//, "").replace(/-(gzip|br|deflate)"$/, '"') : null;
       const r = await nc.req("GET", p); if (r.status === 404) return null;
       if (!r.ok) throw new Error("Nextcloud antwortet mit Fehler " + r.status);
-      return {data: await r.json(), etag: r.headers.get("ETag") || r.headers.get("OC-ETag") || null, mtime: Date.parse(r.headers.get("Last-Modified") || 0)};
+      return {data: await r.json(), etag, mtime: Date.parse(r.headers.get("Last-Modified") || 0)};
     }
     const H = {Authorization: "Bearer " + await auth.token()};
     const m = await fetch(odPath(p), {headers: H}); if (m.status === 404) return null;
