@@ -2,7 +2,7 @@
 // Die Lieder selbst liegen im Speicher der App (nicht hier) und kommen beim Abgleich aus OneDrive.
 // Mit Internet wird immer die neueste Version geladen (Browser-Zwischenspeicher wird umgangen),
 // ohne Internet die zuletzt gespeicherte.
-const CACHE = "showplayer-v10";
+const CACHE = "showplayer-v11";
 const ASSETS = ["./", "./index.html", "./config.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, {cache: "reload"})))).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {
@@ -20,5 +20,5 @@ self.addEventListener("fetch", e => {
   } else if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })));
   }
-  // Microsoft-Anmeldung und OneDrive laufen immer direkt übers Netz.
+  // Nextcloud (und übergangsweise OneDrive) laufen immer direkt übers Netz.
 });

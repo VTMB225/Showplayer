@@ -619,15 +619,16 @@ function mergeRemote(d){
 function setSync(){
   const el = $("#sync"), lbl = el.querySelector(".lbl"); let cls = "", txt;
   const pend = dirty.size + (uploading ? 1 : 0);
-  if (auth.clientId()) {
-    const map = {off:["OneDrive verbinden","warn"], syncing:["OneDrive · gleicht ab …","warn"], ok:["OneDrive · abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : ""), "ok"], offline:["Offline · wird später abgeglichen","warn"], login:["OneDrive · bitte erneut anmelden","warn"], error:["OneDrive · Fehler – tippen","bad"]};
+  if (nc.on() || auth.clientId()) {
+    const N = cloud.name();
+    const map = {off:[N + " verbinden","warn"], syncing:[N + " · gleicht ab …","warn"], ok:[N + " · abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : ""), "ok"], offline:["Offline · wird später abgeglichen","warn"], login:[N + " · bitte erneut anmelden","warn"], error:[N + " · Fehler – tippen","bad"]};
     [txt, cls] = map[od.status] || map.off;
-    if (od.status === "ok" && od.songsBusy) { txt = "OneDrive · " + od.songsBusy; cls = "warn"; }
+    if (od.status === "ok" && od.songsBusy) { txt = N + " · " + od.songsBusy; cls = "warn"; }
     if (dirOk) txt += " · Ordner „" + dirName + "“";
   }
   else if (dirOk) { txt = dirBusy ? "Speichert in „" + dirName + "“ …" : "Ordner „" + dirName + "“ · gespeichert"; cls = dirErr ? "bad" : (dirBusy ? "warn" : "ok"); if (dirErr) txt = "Ordner „" + dirName + "“ nicht erreichbar – tippen"; }
   else if (dirHandle) { txt = "Ordner „" + dirHandle.name + "“ verbinden – tippen"; cls = "warn"; }
-  else if (!coll) { txt = "Nur auf diesem Gerät – OneDrive einrichten"; cls = "warn"; }
+  else if (!coll) { txt = "Nur auf diesem Gerät – Nextcloud einrichten"; cls = "warn"; }
   else if (!online || syncErr) { txt = "Offline · lokal gesichert"; cls = "warn"; }
   else if (pend) { txt = uploading ? "Lädt hoch …" : "Gleicht ab …"; cls = "warn"; }
   else { txt = "Abgeglichen"; cls = "ok"; }
@@ -667,7 +668,7 @@ async function ensureAudio(s){
     const f = await fh.getFile(); const blob = new Blob([await f.arrayBuffer()], {type: s.mime || f.type || "audio/mpeg"});
     await audioPut(s.id, blob); return blob;
   }
-  if (s.od && auth.connected() && navigator.onLine) { const blob = await odDownloadSong(s); await audioPut(s.id, blob); return blob; }
+  if (s.od && cloud.ready() && navigator.onLine) { const blob = await odDownloadSong(s); await audioPut(s.id, blob); return blob; }
   if (!s.asset) throw new Error("missing");
   const r = await fetch("/_blob/" + s.asset); if (!r.ok) throw new Error("fetch");
   const blob = new Blob([fromB64((await r.text()).trim())], {type: s.mime || "audio/mpeg"});
@@ -967,7 +968,7 @@ function libSheet(target){
   void target;
 }
 async function deleteSong(s, quiet){
-  if (s.od && auth.connected()) odDelete("Lieder/" + songFileName(s)).catch(()=>{});
+  if (s.od && cloud.ready()) odDelete("Lieder/" + songFileName(s)).catch(()=>{});
   for (const e of events()) { const had = evSongIds(e).has(s.id); e.program = e.program.filter(i=>i.sid!==s.id); e.pool = e.pool.filter(i=>i.sid!==s.id); rd(e).forEach(p => p.songs = p.songs.filter(x=>x!==s.id)); if (had) save(e); }
   if (player.sid === s.id) stopNow();
   const asset = s.asset; s.deleted = true; s.asset = null; save(s); await audioDel(s.id);
@@ -1245,6 +1246,7 @@ function settingsSheet(){
       <div class="stepper"><button type="button" data-a="f-">−</button><input type="range" id="sFade" min="0.5" max="15" step="0.5" value="${fadeSec}" aria-label="Fade-Zeit in Sekunden"><button type="button" data-a="f+">+</button></div></div>
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="x-">−</button><input type="range" id="sX" min="0" max="6" step="0.1" value="${xSec}" aria-label="Ausblendzeit beim Wechsel"><button type="button" data-a="x+">+</button></div></div>
+    ${ncSection()}
     ${odSection()}
     ${remoteSection()}
     ${backupSection()}
@@ -1266,6 +1268,8 @@ function settingsSheet(){
     if (a==="rcscan") { closeRemote(); remoteConnect().then(() => { if ($("#layer").firstChild) settingsSheet(); }); settingsSheet(); return; }
     if (a==="odlogin") { const v = root.querySelector("#odCid").value.trim(); if (v) lsRaw.set("sp-client", v); auth.login(false); return true; }
     if (a==="odsync") { odRun(); return true; }
+    if (a==="ncsave") { ncConnect(root); return; }
+    if (a==="ncout") { confirmSheet("Nextcloud trennen?", "Die Daten bleiben in der Nextcloud und auf diesem Gerät. Änderungen werden nicht mehr abgeglichen.", "Trennen", () => { nc.setConf(null); odSet("off"); render(); }); return; }
     if (a==="odout") { confirmSheet("OneDrive trennen?", "Die Daten bleiben in OneDrive und auf diesem Gerät. Änderungen werden nicht mehr abgeglichen.", "Trennen", () => { auth.logout(); odSet("off"); render(); }); return; }
     if (a==="odcopy") { const t = auth.redirect(); navigator.clipboard?.writeText(t).then(() => toast("Adresse kopiert."), () => toast(t)); return; }
     if (a==="bzip") { exportZip(); return true; }
@@ -1460,21 +1464,112 @@ const auth = {
   },
   logout(){ lsRaw.set("sp-auth", null); }
 };
+/* ---------- Nextcloud (WebDAV, Anmeldung mit App-Passwort) ---------- */
+const NC_DEFAULT_URL = "https://cloud.veranstaltungstechnikmarcelbrommer.de";
+const nc = {
+  conf(){ try { return JSON.parse(lsRaw.get("sp-nc") || "null") || {}; } catch { return {}; } },
+  setConf(c){ lsRaw.set("sp-nc", c ? JSON.stringify(c) : null); },
+  on(){ const c = this.conf(); return !!(c.url && c.user && c.pass); },
+  dir(){ return String(this.conf().dir || "Apps/Showplayer").replace(/^\/+|\/+$/g, ""); },
+  root(){ const c = this.conf(); return String(c.url).replace(/\/+$/, "") + "/remote.php/dav/files/" + encodeURIComponent(c.user) + "/"; },
+  enc(path){ return path.split("/").filter(Boolean).map(encodeURIComponent).join("/"); },
+  url(p){ return this.root() + this.enc(this.dir() + "/" + (p || "")); },
+  hdr(){ const c = this.conf(); return {Authorization: "Basic " + btoa(unescape(encodeURIComponent(c.user + ":" + c.pass)))}; },
+  async req(method, p, opts = {}){
+    let r;
+    try { r = await fetch(this.url(p), {method, cache: "no-store", ...opts, headers: {...this.hdr(), ...(opts.headers || {})}}); }
+    catch (e) { const x = new Error(navigator.onLine ? "Nextcloud nicht erreichbar (Server aus oder WebAppPassword nicht eingerichtet)" : "offline"); x.offline = !navigator.onLine; throw x; }
+    if (r.status === 401) { const x = new Error("login"); x.needLogin = true; throw x; }
+    return r;
+  },
+  async mkdirs(sub){ // legt die Ordnerkette an; „existiert schon“ (405) ist kein Fehler
+    const parts = (this.dir() + "/" + (sub || "")).split("/").filter(Boolean); let acc = "";
+    for (const part of parts) { acc += (acc ? "/" : "") + part; try { await fetch(this.root() + this.enc(acc), {method: "MKCOL", headers: this.hdr()}); } catch {} }
+  }
+};
+/* Gemeinsame Schicht: Nextcloud, wenn eingerichtet – sonst (übergangsweise) OneDrive */
+const cloud = {
+  kind(){ return nc.on() ? "nc" : auth.connected() ? "od" : null; },
+  name(){ return !nc.on() && auth.connected() ? "OneDrive" : "Nextcloud"; },
+  ready(){ return !!this.kind(); },
+  async getJson(p){ // -> {data, etag, mtime} oder null
+    if (nc.on()) {
+      const r = await nc.req("GET", p); if (r.status === 404) return null;
+      if (!r.ok) throw new Error("Nextcloud antwortet mit Fehler " + r.status);
+      return {data: await r.json(), etag: r.headers.get("ETag") || r.headers.get("OC-ETag") || null, mtime: Date.parse(r.headers.get("Last-Modified") || 0)};
+    }
+    const H = {Authorization: "Bearer " + await auth.token()};
+    const m = await fetch(odPath(p), {headers: H}); if (m.status === 404) return null;
+    if (!m.ok) throw new Error("OneDrive antwortet mit Fehler " + m.status);
+    const j = await m.json(); const c = await fetch(j["@microsoft.graph.downloadUrl"]); if (!c.ok) throw new Error("Download " + c.status);
+    return {data: await c.json(), etag: j.eTag, mtime: Date.parse(j.lastModifiedDateTime || 0)};
+  },
+  async getBlob(p){
+    if (nc.on()) { const r = await nc.req("GET", p); if (!r.ok) throw new Error("Datei " + r.status); return await r.blob(); }
+    const H = {Authorization: "Bearer " + await auth.token()};
+    const m = await fetch(odPath(p), {headers: H}); if (!m.ok) throw new Error("Datei " + m.status);
+    const j = await m.json(); const r = await fetch(j["@microsoft.graph.downloadUrl"]); if (!r.ok) throw new Error("Datei " + r.status);
+    return await r.blob();
+  },
+  async put(p, body, type, ifMatch){ // -> HTTP-Status
+    if (nc.on()) {
+      const h = {"Content-Type": type || "application/octet-stream"}; if (ifMatch) h["If-Match"] = ifMatch;
+      let r = await nc.req("PUT", p, {headers: h, body});
+      if (r.status === 409 || r.status === 404) { await nc.mkdirs(p.split("/").slice(0, -1).join("/")); r = await nc.req("PUT", p, {headers: h, body}); }
+      return r.status;
+    }
+    const H = {Authorization: "Bearer " + await auth.token()};
+    const size = body instanceof Blob ? body.size : new Blob([body]).size;
+    if (size <= 4 * 1024 * 1024) {
+      const r = await fetch(odPath(p) + ":/content", {method: "PUT", headers: {...H, "Content-Type": type || "application/octet-stream", ...(ifMatch ? {"If-Match": ifMatch} : {})}, body});
+      return r.status;
+    }
+    const blob = body instanceof Blob ? body : new Blob([body]);
+    const s = await fetch(odPath(p) + ":/createUploadSession", {method: "POST", headers: {...H, "Content-Type": "application/json"}, body: JSON.stringify({item: {"@microsoft.graph.conflictBehavior": "replace"}})});
+    if (!s.ok) return s.status;
+    const {uploadUrl} = await s.json(); const CH = 320 * 1024 * 20; let last = 200;
+    for (let off = 0; off < blob.size; off += CH) {
+      const end = Math.min(off + CH, blob.size);
+      const r = await fetch(uploadUrl, {method: "PUT", headers: {"Content-Range": `bytes ${off}-${end - 1}/${blob.size}`}, body: blob.slice(off, end)});
+      if (!r.ok && r.status !== 202) return r.status; last = 200;
+    }
+    return last;
+  },
+  async del(p){
+    if (nc.on()) { await nc.req("DELETE", p); return; }
+    await fetch(odPath(p), {method: "DELETE", headers: {Authorization: "Bearer " + await auth.token()}});
+  },
+  async list(sub){ // -> [{name, mtime}]
+    if (nc.on()) {
+      const r = await nc.req("PROPFIND", sub + "/", {headers: {Depth: "1", "Content-Type": "application/xml"}, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>'});
+      if (r.status === 404) return []; if (!r.ok && r.status !== 207) throw new Error("list " + r.status);
+      const doc = new DOMParser().parseFromString(await r.text(), "application/xml"); const out = [];
+      for (const re of doc.getElementsByTagNameNS("DAV:", "response")) {
+        if (re.getElementsByTagNameNS("DAV:", "collection").length) continue;
+        const href = re.getElementsByTagNameNS("DAV:", "href")[0]?.textContent || "";
+        const name = decodeURIComponent(href.replace(/\/+$/, "").split("/").pop() || "");
+        const lm = re.getElementsByTagNameNS("DAV:", "getlastmodified")[0]?.textContent;
+        if (name) out.push({name, mtime: Date.parse(lm || 0)});
+      }
+      return out;
+    }
+    const r = await fetch(odPath(sub) + ":/children?$top=200", {headers: {Authorization: "Bearer " + await auth.token()}});
+    if (r.status === 404) return []; if (!r.ok) throw new Error("list " + r.status);
+    return ((await r.json()).value || []).map(it => ({name: it.name, mtime: Date.parse(it.lastModifiedDateTime || 0)}));
+  }
+};
 const od = {status:"off", last:null, timer:null, busy:false, again:false, err:"", songsBusy:""};
 function odSet(st, err){ od.status = st; od.err = err || ""; setSync(); }
-function odSchedule(ms = 2000){ if (!auth.connected()) return; clearTimeout(od.timer); od.timer = setTimeout(odRun, ms); }
+function odSchedule(ms = 2000){ if (!cloud.ready()) return; clearTimeout(od.timer); od.timer = setTimeout(odRun, ms); }
 async function odRun(){
-  if (!auth.clientId() || !auth.connected()) { odSet("off"); return; }
+  if (!cloud.ready()) { odSet("off"); return; }
   if (!navigator.onLine) { odSet("offline"); return; }
   if (od.busy) { od.again = true; return; }
   od.busy = true; odSet("syncing");
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const H = {Authorization: "Bearer " + await auth.token()};
-      let remote = null, etag = null;
-      const meta = await fetch(odPath("showplayer-daten.json"), {headers:H});
-      if (meta.ok) { const j = await meta.json(); etag = j.eTag; const c = await fetch(j["@microsoft.graph.downloadUrl"]); if (!c.ok) throw new Error("Download " + c.status); remote = await c.json(); }
-      else if (meta.status !== 404) throw new Error("OneDrive antwortet mit Fehler " + meta.status);
+      const got = await cloud.getJson("showplayer-daten.json");
+      const remote = got ? got.data : null, etag = got ? got.etag : null;
       const rm = new Map(); let changed = false;
       if (remote && Array.isArray(remote.recs)) {
         for (const d of remote.recs) { rm.set(d.id, d); if (mergeRemote(d)) changed = true; }
@@ -1485,12 +1580,12 @@ async function odRun(){
         }
       }
       if (changed) { cleanTitles(); if (!ev()) curEv = events()[0]?.id || null; render(); scheduleDirSave(); }
-      const needPut = !etag || [...recs.values()].some(r => { const x = rm.get(r.id); return !x || (r.updated || 0) > (x.updated || 0); }) || (+ls.get("settingsAt", 0) > (remote?.settings?.at || 0));
+      const needPut = !got || [...recs.values()].some(r => { const x = rm.get(r.id); return !x || (r.updated || 0) > (x.updated || 0); }) || (+ls.get("settingsAt", 0) > (remote?.settings?.at || 0));
       if (needPut) {
-        const put = await fetch(odPath("showplayer-daten.json") + ":/content", {method:"PUT", headers:{...H, "Content-Type":"application/json", ...(etag ? {"If-Match": etag} : {})},
-          body: JSON.stringify({app:"showplayer", version:1, saved: Date.now(), settings: {keys: ls.get("keys", null), fade: fadeSec, xfade: xSec, xend: xEnd, auto, at: +ls.get("settingsAt", 0)}, recs: [...recs.values()]})});
-        if (put.status === 412 || put.status === 409) continue;
-        if (!put.ok) throw new Error("Speichern in OneDrive fehlgeschlagen (" + put.status + ")");
+        const body = JSON.stringify({app:"showplayer", version:1, saved: Date.now(), settings: {keys: ls.get("keys", null), fade: fadeSec, xfade: xSec, xend: xEnd, auto, at: +ls.get("settingsAt", 0)}, recs: [...recs.values()]});
+        const stt = await cloud.put("showplayer-daten.json", body, "application/json", etag);
+        if (stt === 412 || stt === 409) continue;
+        if (stt < 200 || stt >= 300) throw new Error("Speichern in " + cloud.name() + " fehlgeschlagen (" + stt + ")");
       }
       od.last = new Date(); odSet("ok"); break;
     }
@@ -1498,38 +1593,19 @@ async function odRun(){
   } catch (e) {
     if (e.needLogin) {
       odSet("login");
-      if (navigator.onLine && !sessionStorage.getItem("sp-silent")) { sessionStorage.setItem("sp-silent", "1"); auth.login(true); }
+      if (!nc.on() && navigator.onLine && !sessionStorage.getItem("sp-silent")) { sessionStorage.setItem("sp-silent", "1"); auth.login(true); }
     } else odSet(navigator.onLine ? "error" : "offline", e.message);
   } finally {
     od.busy = false;
     if (od.again) { od.again = false; odSchedule(500); }
   }
 }
-async function odPutBlob(path, blob, type){
-  const H = {Authorization: "Bearer " + await auth.token()};
-  if (blob.size <= 4 * 1024 * 1024) {
-    const r = await fetch(odPath(path) + ":/content", {method:"PUT", headers:{...H, "Content-Type": type || "application/octet-stream"}, body: blob});
-    if (!r.ok) throw new Error("Upload " + r.status); return;
-  }
-  const s = await fetch(odPath(path) + ":/createUploadSession", {method:"POST", headers:{...H, "Content-Type":"application/json"}, body: JSON.stringify({item: {"@microsoft.graph.conflictBehavior": "replace"}})});
-  if (!s.ok) throw new Error("Upload " + s.status);
-  const {uploadUrl} = await s.json(); const CH = 320 * 1024 * 20;
-  for (let off = 0; off < blob.size; off += CH) {
-    const end = Math.min(off + CH, blob.size);
-    const r = await fetch(uploadUrl, {method:"PUT", headers:{"Content-Range": `bytes ${off}-${end - 1}/${blob.size}`}, body: blob.slice(off, end)});
-    if (!r.ok && r.status !== 202) throw new Error("Upload " + r.status);
-  }
-}
-async function odDelete(path){ await fetch(odPath(path), {method:"DELETE", headers:{Authorization: "Bearer " + await auth.token()}}); }
-async function odDownloadSong(s){
-  const H = {Authorization: "Bearer " + await auth.token()};
-  const m = await fetch(odPath("Lieder/" + songFileName(s)), {headers:H}); if (!m.ok) throw new Error("Lied " + m.status);
-  const j = await m.json(); const r = await fetch(j["@microsoft.graph.downloadUrl"]); if (!r.ok) throw new Error("Lied " + r.status);
-  return new Blob([await r.blob()], {type: s.mime || "audio/mpeg"});
-}
+async function odPutBlob(path, blob, type){ const st = await cloud.put(path, blob, type); if (st < 200 || st >= 300) throw new Error("Upload " + st); }
+async function odDelete(path){ await cloud.del(path); }
+async function odDownloadSong(s){ const b = await cloud.getBlob("Lieder/" + songFileName(s)); return new Blob([b], {type: s.mime || "audio/mpeg"}); }
 let odSongsRunning = false;
-async function odSongs(){ // Lieder, die nur auf diesem Gerät liegen, nach OneDrive hochladen
-  if (odSongsRunning || !auth.connected() || !navigator.onLine) return;
+async function odSongs(){ // Lieder, die nur auf diesem Gerät liegen, hochladen
+  if (odSongsRunning || !cloud.ready() || !navigator.onLine) return;
   const todo = songs().filter(s => !s.od && audioKeys.has(s.id)); if (!todo.length) return;
   odSongsRunning = true;
   try {
@@ -1539,13 +1615,40 @@ async function odSongs(){ // Lieder, die nur auf diesem Gerät liegen, nach OneD
       await odPutBlob("Lieder/" + songFileName(s2), blob, s2.mime);
       const cur = recs.get(s2.id); if (cur) { cur.od = true; save(cur); }
     }
-  } catch (e) { if (!e.needLogin) toast("Ein Lied konnte nicht nach OneDrive hochgeladen werden. Neuer Versuch beim nächsten Abgleich."); }
+  } catch (e) { if (!e.needLogin) toast("Ein Lied konnte nicht hochgeladen werden. Neuer Versuch beim nächsten Abgleich."); }
   finally { odSongsRunning = false; od.songsBusy = ""; setSync(); render(); }
 }
 window.addEventListener("online", () => odSchedule(300));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") odSchedule(300); });
-setInterval(() => { if (document.visibilityState === "visible" && auth.connected()) odRun(); }, 60000);
+setInterval(() => { if (document.visibilityState === "visible" && cloud.ready()) odRun(); }, 60000);
+function ncSection(){
+  const c = nc.conf();
+  const st = !nc.on() ? "Nicht verbunden." : ({ok:"Verbunden · zuletzt abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : "–"), syncing:"Gleicht gerade ab …", offline:"Offline – wird später abgeglichen.", login:"Anmeldung abgelehnt – bitte Benutzername und App-Passwort prüfen.", error:"Fehler: " + od.err, off:"Verbunden."}[od.status] || "Verbunden.");
+  return `<span class="lbl2">Nextcloud-Speicher</span>
+    <p>${esc(st.replace(/\.$/, ""))}. Die Daten liegen in deiner Nextcloud im Ordner <b style="color:var(--fg)">${esc(nc.dir())}</b> – die Lieder im Unterordner „Lieder“.</p>
+    <label class="setrow"><span class="lbl2">Nextcloud-Adresse</span><input class="inp" id="ncUrl" value="${esc(c.url || NC_DEFAULT_URL)}" autocomplete="off" spellcheck="false"></label>
+    <label class="setrow"><span class="lbl2">Benutzername</span><input class="inp" id="ncUser" value="${esc(c.user || "")}" autocomplete="username" spellcheck="false"></label>
+    <label class="setrow"><span class="lbl2">App-Passwort (Nextcloud → Persönliche Einstellungen → Sicherheit)</span><input class="inp" id="ncPass" type="password" value="${esc(c.pass || "")}" autocomplete="current-password"></label>
+    <label class="setrow"><span class="lbl2">Ordner in der Nextcloud</span><input class="inp" id="ncDir" value="${esc(nc.dir())}" autocomplete="off" spellcheck="false"></label>
+    <div class="acts" style="justify-content:flex-start"><button class="pri" data-a="ncsave">${nc.on() ? "Speichern und neu verbinden" : "Mit Nextcloud verbinden"}</button>${nc.on() ? `<button class="sec" data-a="odsync">Jetzt abgleichen</button><button class="sec" data-a="ncout">Trennen</button>` : ""}</div>`;
+}
+async function ncConnect(root){
+  const v = id => (root.querySelector(id)?.value || "").trim();
+  const c = {url: v("#ncUrl").replace(/\/+$/, ""), user: v("#ncUser"), pass: v("#ncPass"), dir: v("#ncDir").replace(/^\/+|\/+$/g, "") || "Apps/Showplayer"};
+  if (!/^https:\/\//.test(c.url) || !c.user || !c.pass) { toast("Bitte Adresse (mit https://), Benutzername und App-Passwort eintragen."); return; }
+  const old = nc.conf(); nc.setConf(c);
+  try {
+    let r = await nc.req("PROPFIND", "", {headers: {Depth: "0"}});
+    if (r.status === 404) { await nc.mkdirs(""); r = await nc.req("PROPFIND", "", {headers: {Depth: "0"}}); }
+    if (!r.ok && r.status !== 207) throw new Error("Fehler " + r.status);
+    toast("Mit Nextcloud verbunden."); od.status = "off"; odRun(); settingsSheet();
+  } catch (e) {
+    nc.setConf(old.url ? old : null);
+    toast(e.needLogin ? "Anmeldung abgelehnt – Benutzername oder App-Passwort stimmt nicht." : (e.message || "Verbindung fehlgeschlagen."), 7000);
+  }
+}
 function odSection(){
+  if (nc.on()) return `<span class="lbl2">OneDrive (alt)</span><p>Nicht mehr in Benutzung – die App gleicht jetzt über Nextcloud ab.</p>`;
   const cid = auth.clientId();
   const st = !cid ? "Noch nicht eingerichtet." : !auth.connected() ? "Nicht verbunden." : ({ok:"Verbunden · zuletzt abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : "–"), syncing:"Gleicht gerade ab …", offline:"Offline – wird später abgeglichen.", login:"Bitte erneut anmelden.", error:"Fehler: " + od.err, off:"Verbunden."}[od.status] || "Verbunden.");
   return `<span class="lbl2">OneDrive-Speicher</span>
@@ -1630,7 +1733,9 @@ async function connectDir(h, ask){
 }
 window.addEventListener("focus", () => { if (dirOk && !dirSaving) pullExternal().catch(()=>{}); });
 $("#sync").addEventListener("click", () => {
-  if (auth.clientId()) { if (!auth.connected() || od.status === "login") auth.login(false); else if (od.status === "error" || od.status === "offline") odRun(); else settingsSheet(); return; }
+  if (nc.on()) { if (od.status === "error" || od.status === "offline") odRun(); else settingsSheet(); return; }
+  if (auth.clientId() && auth.connected()) { if (od.status === "login") auth.login(false); else if (od.status === "error" || od.status === "offline") odRun(); else settingsSheet(); return; }
+  if (!dirHandle) { settingsSheet(); return; }
   if (dirHandle && (!dirOk || dirErr)) connectDir(dirHandle, true); else settingsSheet();
 });
 
@@ -1643,11 +1748,11 @@ const R = {role: ls.get("role", "player"), name: ls.get("devname", guessName()),
   peers: new Map(), seen: new Set(), pushLast: "", hb: 0};
 function isRemote(){ return R.role === "remote"; }
 const activated = () => navigator.userActivation ? navigator.userActivation.hasBeenActive : true;
-const rcOk = () => auth.connected() && navigator.onLine;
+const rcOk = () => cloud.ready() && navigator.onLine;
 const chSend = (ch, obj) => { try { if (ch && ch.readyState === "open") ch.send(JSON.stringify(obj)); } catch {} };
 function iceDone(pc){ return new Promise(res => { if (pc.iceGatheringState === "complete") return res(); const t = setTimeout(res, 2500); pc.addEventListener("icegatheringstatechange", () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); } }); }); }
-async function odListRemote(){ const r = await fetch(odPath("remote") + ":/children?$top=200", {headers: {Authorization: "Bearer " + await auth.token()}}); if (r.status === 404) return []; if (!r.ok) throw new Error("list " + r.status); return (await r.json()).value || []; }
-async function odItemJson(it){ const r = await fetch(it["@microsoft.graph.downloadUrl"]); if (!r.ok) throw new Error("get " + r.status); return r.json(); }
+async function odListRemote(){ return cloud.list("remote"); }
+async function odItemJson(it){ const g = await cloud.getJson("remote/" + it.name); if (!g) throw new Error("get 404"); return g.data; }
 const odPutJson = (path, obj) => odPutBlob(path, new Blob([JSON.stringify(obj)], {type: "application/json"}), "application/json");
 
 function stateObj(){
@@ -1724,7 +1829,7 @@ async function findPlayers(){
   const out = [];
   for (const it of await odListRemote()) {
     const m = it.name.match(/^player-([a-z0-9]+)\.json$/i); if (!m || m[1] === devId) continue;
-    if (Date.now() - Date.parse(it.lastModifiedDateTime || 0) > 90000) continue;
+    if (Date.now() - (it.mtime || 0) > 90000) continue;
     try { const j = await odItemJson(it); out.push({id: m[1], name: String(j.name || "Player").slice(0, 30)}); } catch {}
   }
   R.players = out; return out;
@@ -1751,8 +1856,7 @@ async function remoteConnect(){
     let ans = null;
     for (let i = 0; i < 40 && !ans && R.pc === pc; i++) {
       await new Promise(r => setTimeout(r, 1000));
-      const r = await fetch(odPath("remote/answer-" + nonce + ".json"), {headers: {Authorization: "Bearer " + await auth.token()}});
-      if (r.ok) { try { ans = await odItemJson(await r.json()); } catch {} }
+      try { const g = await cloud.getJson("remote/answer-" + nonce + ".json"); if (g) ans = g.data; } catch {}
     }
     if (R.pc !== pc) return;
     if (!ans) { closeRemote(); setRc(); odDelete(`remote/offer-${nonce}-${R.target}.json`).catch(() => {}); toast(R.targetName + " antwortet nicht. Ist dort die App offen und „Fernbedienung erlauben“ an?", 6000); return; }
@@ -1797,7 +1901,7 @@ function setRole(role){
   if (role === "remote") remoteConnect();
 }
 function remoteSection(){
-  const need = !auth.connected() ? `<p>Für die Fernbedienung müssen beide Geräte mit OneDrive verbunden sein (siehe oben).</p>` : "";
+  const need = !cloud.ready() ? `<p>Für die Fernbedienung müssen beide Geräte mit der Nextcloud verbunden sein (siehe oben).</p>` : "";
   const pl = R.players.map(p => `<button type="button" data-a="tgt:${esc(p.id)}" class="${p.id === R.target ? "on" : ""}"><b>${esc(p.name)}</b>${p.id === R.target && R.connected ? " · verbunden" : ""}</button>`).join("");
   return `<span class="lbl2">Fernbedienung</span>
     <div class="seg"><button type="button" data-a="role:player" class="${R.role === "player" ? "on" : ""}">Dieses Gerät spielt</button><button type="button" data-a="role:remote" class="${R.role === "remote" ? "on" : ""}">Dieses Gerät ist Fernbedienung</button></div>
@@ -2485,10 +2589,10 @@ async function boot(){
   else if (red?.error && !red.silent && red.error !== "access_denied") toast("Anmeldung fehlgeschlagen: " + String(red.desc || red.error).split("\n")[0], 6000);
   else if (red?.error === "access_denied") toast("Anmeldung abgebrochen.");
   // Neues Gerät: automatisch anmelden. Ist der Browser bei Microsoft schon angemeldet, geht das ohne Eingabe.
-  if (!red && auth.clientId() && !auth.connected() && navigator.onLine && !sessionStorage.getItem("sp-auto")) { sessionStorage.setItem("sp-auto", "1"); auth.login(true); return; }
+  if (!red && !nc.on() && auth.clientId() && lsRaw.get("sp-auth") && !auth.connected() && navigator.onLine && !sessionStorage.getItem("sp-auto")) { sessionStorage.setItem("sp-auto", "1"); auth.login(true); return; }
   if (idb) { try { const h = await iGet("kv", "dir"); if (h) { dirHandle = h; await connectDir(h, false); } } catch {} }
   setSync();
-  if (auth.connected()) odRun();
+  if (cloud.ready()) odRun();
   setRc(); if (isRemote()) remoteConnect();
   return;
   try {
