@@ -1471,7 +1471,12 @@ const nc = {
   setConf(c){ lsRaw.set("sp-nc", c ? JSON.stringify(c) : null); },
   on(){ const c = this.conf(); return !!(c.url && c.user && c.pass); },
   dir(){ return String(this.conf().dir || "Apps/Showplayer").replace(/^\/+|\/+$/g, ""); },
-  root(){ const c = this.conf(); return String(c.url).replace(/\/+$/, "") + "/remote.php/dav/files/" + encodeURIComponent(c.user) + "/"; },
+  root(){ const c = this.conf(); return String(c.url).replace(/\/+$/, "") + "/remote.php/dav/files/" + encodeURIComponent(c.uid || c.user) + "/"; },
+  async findUid(c){ // Anmeldename (z. B. E-Mail) -> interne Benutzerkennung für die WebDAV-Pfade
+    let r; try { r = await fetch(String(c.url).replace(/\/+$/, "") + "/remote.php/dav/", {method: "PROPFIND", headers: {...this.hdr(), Depth: "0", "Content-Type": "application/xml"}, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>'}); } catch (e) { throw new Error("Nextcloud nicht erreichbar (Server aus oder WebAppPassword nicht eingerichtet)"); }
+    if (r.status === 401) { const x = new Error("login"); x.needLogin = true; throw x; }
+    const m = (await r.text()).match(/principals\/users\/([^<\/]+)/); return m ? decodeURIComponent(m[1]) : c.user;
+  },
   enc(path){ return path.split("/").filter(Boolean).map(encodeURIComponent).join("/"); },
   url(p){ return this.root() + this.enc(this.dir() + "/" + (p || "")); },
   hdr(){ const c = this.conf(); return {Authorization: "Basic " + btoa(unescape(encodeURIComponent(c.user + ":" + c.pass)))}; },
@@ -1638,6 +1643,7 @@ async function ncConnect(root){
   if (!/^https:\/\//.test(c.url) || !c.user || !c.pass) { toast("Bitte Adresse (mit https://), Benutzername und App-Passwort eintragen."); return; }
   const old = nc.conf(); nc.setConf(c);
   try {
+    c.uid = await nc.findUid(c); nc.setConf(c);
     let r = await nc.req("PROPFIND", "", {headers: {Depth: "0"}});
     if (r.status === 404) { await nc.mkdirs(""); r = await nc.req("PROPFIND", "", {headers: {Depth: "0"}}); }
     if (!r.ok && r.status !== 207) throw new Error("Fehler " + r.status);
