@@ -509,7 +509,7 @@ body.remote .deck{box-shadow:inset 0 3px 0 var(--cyan)}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = s => { if (!isFinite(s) || s < 0) s = 0; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
-const APP_VERSION = "2026-11-08n";
+const APP_VERSION = "2026-11-10a";
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const MAX_SYNC = 14.5 * 1024 * 1024; // größer passt nicht in den Online-Speicher
 const SETTING_KEYS = ["keys","fade","xfade","xend","auto"];
@@ -530,7 +530,7 @@ const iDel = (s,k) => tx(s, "readwrite", st => st.delete(k));
 async function audioGet(id){ if (idb) { try { return await iGet("audio", id); } catch {} } return memAudio.get(id); }
 async function audioPut(id, blob){ memAudio.set(id, blob); if (idb) { try { await iPut("audio", blob, id); memAudio.delete(id); } catch {} } audioKeys.add(id); }
 const hasAudio = id => audioKeys.has(id) || (dirOk && songFiles.has(id));
-// Spielbar = Lied existiert, ist nicht gelöscht und liegt hier oder in OneDrive (auf der Fernbedienung zählt nur „nicht gelöscht“)
+// Spielbar = Lied existiert, ist nicht gelöscht und liegt hier oder in der Nextcloud (auf der Fernbedienung zählt nur „nicht gelöscht“)
 function playable(sid){ const s = recs.get(sid); if (!s || s.kind !== "song" || s.deleted) return false; return (typeof isRemote === "function" && isRemote()) || hasAudio(sid) || !!s.asset || !!s.od; }
 async function audioDel(id){ memAudio.delete(id); audioKeys.delete(id); if (idb) { try { await iDel("audio", id); } catch {} } }
 
@@ -619,7 +619,7 @@ function mergeRemote(d){
 function setSync(){
   const el = $("#sync"), lbl = el.querySelector(".lbl"); let cls = "", txt;
   const pend = dirty.size + (uploading ? 1 : 0);
-  if (nc.on() || auth.clientId()) {
+  if (nc.on()) {
     const N = cloud.name();
     const map = {off:[N + " verbinden","warn"], syncing:[N + " · gleicht ab …","warn"], ok:[N + " · abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : ""), "ok"], offline:["Offline · wird später abgeglichen","warn"], login:[N + " · bitte erneut anmelden","warn"], error:[N + " · Fehler – tippen","bad"]};
     [txt, cls] = map[od.status] || map.off;
@@ -759,7 +759,7 @@ const icoStop = '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/>
 
 function metaTags(s){
   const t = []; if (isRemote()) return "";
-  if (!hasAudio(s.id)) t.push(s.od ? '<span class="tag">in OneDrive – lädt beim Abspielen</span>' : s.asset ? '<span class="tag miss">wird geladen beim Abspielen</span>' : '<span class="tag miss">Datei fehlt hier</span>');
+  if (!hasAudio(s.id)) t.push(s.od ? '<span class="tag">in der Nextcloud – lädt beim Abspielen</span>' : s.asset ? '<span class="tag miss">wird geladen beim Abspielen</span>' : '<span class="tag miss">Datei fehlt hier</span>');
   else if (coll && !s.asset) t.push(s.big ? '<span class="tag">nur dieses Gerät</span>' : '<span class="tag">noch nicht hochgeladen</span>');
   return t.join("");
 }
@@ -1247,7 +1247,6 @@ function settingsSheet(){
     <div class="setrow"><span class="lv"><span class="lbl2">Ausblenden beim Wechsel</span><b id="sXV">${f(xSec)} s</b></span>
       <div class="stepper"><button type="button" data-a="x-">−</button><input type="range" id="sX" min="0" max="6" step="0.1" value="${xSec}" aria-label="Ausblendzeit beim Wechsel"><button type="button" data-a="x+">+</button></div></div>
     ${ncSection()}
-    ${odSection()}
     ${remoteSection()}
     ${backupSection()}
     ${window.showDirectoryPicker ? `<span class="lbl2">Zusätzlich: Ordner / USB-Stick (nur Edge/Chrome am PC)</span>
@@ -1266,14 +1265,11 @@ function settingsSheet(){
     if (a.startsWith("role:")) { setRole(a.slice(5)); settingsSheet(); return; }
     if (a.startsWith("tgt:")) { R.target = a.slice(4); ls.set("rcTarget", R.target); closeRemote(); remoteConnect(); settingsSheet(); return; }
     if (a==="rcscan") { closeRemote(); remoteConnect().then(() => { if ($("#layer").firstChild) settingsSheet(); }); settingsSheet(); return; }
-    if (a==="odlogin") { const v = root.querySelector("#odCid").value.trim(); if (v) lsRaw.set("sp-client", v); auth.login(false); return true; }
     if (a==="odsync") { odRun(); return true; }
     if (a==="ncsave") { ncConnect(root); return; }
     if (a==="ncqr") { ncQrSheet(); return; }
     if (a==="nclink") { if (ncImport(root.querySelector("#ncLink")?.value)) { toast("Anmeldung übernommen."); od.status = "off"; odRun(); settingsSheet(); } else toast("Das ist kein gültiger Anmeldelink."); return; }
     if (a==="ncout") { confirmSheet("Nextcloud trennen?", "Die Daten bleiben in der Nextcloud und auf diesem Gerät. Änderungen werden nicht mehr abgeglichen.", "Trennen", () => { nc.setConf(null); odSet("off"); render(); }); return; }
-    if (a==="odout") { confirmSheet("OneDrive trennen?", "Die Daten bleiben in OneDrive und auf diesem Gerät. Änderungen werden nicht mehr abgeglichen.", "Trennen", () => { auth.logout(); odSet("off"); render(); }); return; }
-    if (a==="odcopy") { const t = auth.redirect(); navigator.clipboard?.writeText(t).then(() => toast("Adresse kopiert."), () => toast(t)); return; }
     if (a==="bzip") { exportZip(); return true; }
     if (a==="bjson") { exportJson(); return true; }
     if (a==="bload") { $("#impIn").click(); return true; }
@@ -1326,7 +1322,7 @@ document.addEventListener("keydown", e => {
 });
 
 /* ---------- Start ---------- */
-/* ---------- Sicherung im Ordnerformat der Offline-Version (für OneDrive) ---------- */
+/* ---------- Sicherung im Ordnerformat der Offline-Version (für Nextcloud/USB) ---------- */
 let dlCap = true;
 const safeName2 = n => n.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "Lied";
 const songFileName = s => safeName2((s.fname || s.title).replace(/\.[^.]+$/, "")) + " [" + s.id + "]" + ((s.fname || "").match(/\.[a-z0-9]+$/i) || [".mp3"])[0];
@@ -1408,64 +1404,14 @@ async function importFiles(fileList){
 $("#impIn").addEventListener("change", e => { const f = e.target.files; if (f && f.length) importFiles([...f]); e.target.value = ""; });
 function backupSection(){
   return `<span class="lbl2">Sicherung</span>
-    <p>Zusätzlich zur OneDrive-Speicherung kannst du jederzeit eine Sicherung herunterladen. Sie hat dasselbe Format wie der OneDrive- bzw. USB-Ordner.</p>
+    <p>Zusätzlich zur Nextcloud-Speicherung kannst du jederzeit eine Sicherung herunterladen. Sie hat dasselbe Format wie der Nextcloud- bzw. USB-Ordner.</p>
     <div class="acts" style="justify-content:flex-start">${dlCap ? `<button class="pri" data-a="bzip">Alles sichern (ZIP mit Liedern)</button><button class="sec" data-a="bjson">Nur Daten sichern</button>` : ""}<button class="sec" data-a="bload">Sicherung laden …</button></div>
-    <p>Zum Laden: die ZIP auswählen – oder aus dem OneDrive-Ordner die Datei „showplayer-daten.json“ plus die Lieder aus „Lieder“ (mehrere auf einmal markieren). Neuere Änderungen gewinnen, nichts wird gelöscht.</p>`;
+    <p>Zum Laden: die ZIP auswählen – oder aus dem Nextcloud-Ordner die Datei „showplayer-daten.json“ plus die Lieder aus „Lieder“ (mehrere auf einmal markieren). Neuere Änderungen gewinnen, nichts wird gelöscht.</p>`;
 }
 
 
-/* ---------- OneDrive (wie im Zeitbuch: Anmeldung mit PKCE, Daten im App-Ordner) ---------- */
-const AUTH_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
-const GRAPH = "https://graph.microsoft.com/v1.0";
-const SCOPE = "Files.ReadWrite.AppFolder offline_access";
-const OD_DIR = "Showplayer";
+/* ---------- Lokaler Speicher (Rohwerte) ---------- */
 const lsRaw = { get(k){ try { return localStorage.getItem(k); } catch { return null; } }, set(k, v){ try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
-const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const rnd = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
-const odPath = p => GRAPH + "/me/drive/special/approot:/" + (OD_DIR + "/" + p).split("/").map(encodeURIComponent).join("/");
-const auth = {
-  clientId(){ return (lsRaw.get("sp-client") || window.SHOWPLAYER_CONFIG?.clientId || "").trim(); },
-  redirect(){ return location.origin + location.pathname.replace(/index\.html$/, ""); },
-  tok(){ try { return JSON.parse(lsRaw.get("sp-auth") || "null"); } catch { return null; } },
-  saveTok(j){ const o = this.tok() || {}; lsRaw.set("sp-auth", JSON.stringify({connected:true, access:j.access_token, exp:Date.now() + (j.expires_in || 3600) * 1000, refresh:j.refresh_token || o.refresh || null})); },
-  connected(){ return !!this.tok()?.connected; },
-  async login(silent){
-    if (!this.clientId()) { toast("Bitte zuerst die Client-ID in den Einstellungen eintragen."); settingsSheet(); return; }
-    const v = rnd(48), st = rnd(18);
-    sessionStorage.setItem("sp-pkce", JSON.stringify({v, st, silent: !!silent}));
-    const ch = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)));
-    const p = new URLSearchParams({client_id:this.clientId(), response_type:"code", redirect_uri:this.redirect(), response_mode:"query", scope:SCOPE, code_challenge:ch, code_challenge_method:"S256", state:st});
-    if (silent) p.set("prompt", "none");
-    location.assign(AUTH_URL + "/authorize?" + p);
-  },
-  async handleRedirect(){
-    const q = new URLSearchParams(location.search);
-    if (!q.has("code") && !q.has("error")) return null;
-    let pk = null; try { pk = JSON.parse(sessionStorage.getItem("sp-pkce") || "null"); } catch {}
-    sessionStorage.removeItem("sp-pkce");
-    history.replaceState(null, "", this.redirect() + location.hash);
-    if (!pk || q.get("state") !== pk.st) return {error:"state"};
-    if (q.has("error")) return {error:q.get("error"), silent:pk.silent, desc:q.get("error_description")};
-    try {
-      const r = await fetch(AUTH_URL + "/token", {method:"POST", body:new URLSearchParams({client_id:this.clientId(), grant_type:"authorization_code", code:q.get("code"), redirect_uri:this.redirect(), code_verifier:pk.v, scope:SCOPE})});
-      const j = await r.json();
-      if (!r.ok) return {error:j.error, desc:j.error_description};
-      this.saveTok(j); return {ok:true};
-    } catch { return {error:"network"}; }
-  },
-  async token(){
-    const t = this.tok();
-    if (t?.access && t.exp > Date.now() + 60000) return t.access;
-    if (t?.refresh) {
-      const r = await fetch(AUTH_URL + "/token", {method:"POST", body:new URLSearchParams({client_id:this.clientId(), grant_type:"refresh_token", refresh_token:t.refresh, scope:SCOPE})});
-      if (r.ok) { this.saveTok(await r.json()); return this.tok().access; }
-      if (r.status >= 400 && r.status < 500) lsRaw.set("sp-auth", JSON.stringify({connected:true}));
-      else throw new Error("token " + r.status);
-    }
-    const e = new Error("login"); e.needLogin = true; throw e;
-  },
-  logout(){ lsRaw.set("sp-auth", null); }
-};
 /* QR-Code-Erzeugung – QRCode for JavaScript, (c) 2009 Kazuhiko Arase, MIT-Lizenz (über qrcode-terminal). „QR Code“ ist eine Marke der DENSO WAVE INCORPORATED. */
 const vtmbQR = (() => { const M = {}; const R = n => M[n.replace('./','')];
 M["QRMode"] = (() => { const module = {exports:{}}; module.exports = {
@@ -2751,13 +2697,13 @@ const nc = {
     for (const part of parts) { acc += (acc ? "/" : "") + part; try { await fetch(this.root() + this.enc(acc), {method: "MKCOL", headers: this.hdr()}); } catch {} }
   }
 };
-/* Gemeinsame Schicht: Nextcloud, wenn eingerichtet – sonst (übergangsweise) OneDrive */
+/* Speicher-Schicht: Nextcloud */
 const cloud = {
-  kind(){ return nc.on() ? "nc" : auth.connected() ? "od" : null; },
-  name(){ return !nc.on() && auth.connected() ? "OneDrive" : "Nextcloud"; },
+  kind(){ return nc.on() ? "nc" : null; },
+  name(){ return "Nextcloud"; },
   ready(){ return !!this.kind(); },
   async getJson(p){ // -> {data, etag, mtime} oder null
-    if (nc.on()) {
+    {
       const i = await nc.req("PROPFIND", p, {headers: {Depth: "0", "Content-Type": "application/xml"}, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>'});
       if (i.status === 404) return null;
       const et = ((await i.text()).match(/<d:getetag>([^<]*)<\/d:getetag>/) || [])[1];
@@ -2766,49 +2712,23 @@ const cloud = {
       if (!r.ok) throw new Error("Nextcloud antwortet mit Fehler " + r.status);
       return {data: await r.json(), etag, mtime: Date.parse(r.headers.get("Last-Modified") || 0)};
     }
-    const H = {Authorization: "Bearer " + await auth.token()};
-    const m = await fetch(odPath(p), {headers: H}); if (m.status === 404) return null;
-    if (!m.ok) throw new Error("OneDrive antwortet mit Fehler " + m.status);
-    const j = await m.json(); const c = await fetch(j["@microsoft.graph.downloadUrl"]); if (!c.ok) throw new Error("Download " + c.status);
-    return {data: await c.json(), etag: j.eTag, mtime: Date.parse(j.lastModifiedDateTime || 0)};
   },
   async getBlob(p){
-    if (nc.on()) { const r = await nc.req("GET", p); if (!r.ok) throw new Error("Datei " + r.status); return await r.blob(); }
-    const H = {Authorization: "Bearer " + await auth.token()};
-    const m = await fetch(odPath(p), {headers: H}); if (!m.ok) throw new Error("Datei " + m.status);
-    const j = await m.json(); const r = await fetch(j["@microsoft.graph.downloadUrl"]); if (!r.ok) throw new Error("Datei " + r.status);
-    return await r.blob();
+    const r = await nc.req("GET", p); if (!r.ok) throw new Error("Datei " + r.status); return await r.blob();
   },
   async put(p, body, type, ifMatch){ // -> HTTP-Status
-    if (nc.on()) {
+    {
       const h = {"Content-Type": type || "application/octet-stream"}; if (ifMatch) h["If-Match"] = ifMatch;
       let r = await nc.req("PUT", p, {headers: h, body});
       if (r.status === 409 || r.status === 404) { await nc.mkdirs(p.split("/").slice(0, -1).join("/")); r = await nc.req("PUT", p, {headers: h, body}); }
       return r.status;
     }
-    const H = {Authorization: "Bearer " + await auth.token()};
-    const size = body instanceof Blob ? body.size : new Blob([body]).size;
-    if (size <= 4 * 1024 * 1024) {
-      const r = await fetch(odPath(p) + ":/content", {method: "PUT", headers: {...H, "Content-Type": type || "application/octet-stream", ...(ifMatch ? {"If-Match": ifMatch} : {})}, body});
-      return r.status;
-    }
-    const blob = body instanceof Blob ? body : new Blob([body]);
-    const s = await fetch(odPath(p) + ":/createUploadSession", {method: "POST", headers: {...H, "Content-Type": "application/json"}, body: JSON.stringify({item: {"@microsoft.graph.conflictBehavior": "replace"}})});
-    if (!s.ok) return s.status;
-    const {uploadUrl} = await s.json(); const CH = 320 * 1024 * 20; let last = 200;
-    for (let off = 0; off < blob.size; off += CH) {
-      const end = Math.min(off + CH, blob.size);
-      const r = await fetch(uploadUrl, {method: "PUT", headers: {"Content-Range": `bytes ${off}-${end - 1}/${blob.size}`}, body: blob.slice(off, end)});
-      if (!r.ok && r.status !== 202) return r.status; last = 200;
-    }
-    return last;
   },
   async del(p){
-    if (nc.on()) { await nc.req("DELETE", p); return; }
-    await fetch(odPath(p), {method: "DELETE", headers: {Authorization: "Bearer " + await auth.token()}});
+    await nc.req("DELETE", p); return;
   },
   async list(sub){ // -> [{name, mtime}]
-    if (nc.on()) {
+    {
       const r = await nc.req("PROPFIND", sub + "/", {headers: {Depth: "1", "Content-Type": "application/xml"}, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getlastmodified/><d:resourcetype/></d:prop></d:propfind>'});
       if (r.status === 404) return []; if (!r.ok && r.status !== 207) throw new Error("list " + r.status);
       const doc = new DOMParser().parseFromString(await r.text(), "application/xml"); const out = [];
@@ -2821,9 +2741,6 @@ const cloud = {
       }
       return out;
     }
-    const r = await fetch(odPath(sub) + ":/children?$top=200", {headers: {Authorization: "Bearer " + await auth.token()}});
-    if (r.status === 404) return []; if (!r.ok) throw new Error("list " + r.status);
-    return ((await r.json()).value || []).map(it => ({name: it.name, mtime: Date.parse(it.lastModifiedDateTime || 0)}));
   }
 };
 const od = {status:"off", last:null, timer:null, busy:false, again:false, err:"", songsBusy:""};
@@ -2861,7 +2778,6 @@ async function odRun(){
   } catch (e) {
     if (e.needLogin) {
       odSet("login");
-      if (!nc.on() && navigator.onLine && !sessionStorage.getItem("sp-silent")) { sessionStorage.setItem("sp-silent", "1"); auth.login(true); }
     } else odSet(navigator.onLine ? "error" : "offline", e.message);
   } finally {
     od.busy = false;
@@ -2934,16 +2850,6 @@ async function ncConnect(root){
     toast(e.needLogin ? "Anmeldung abgelehnt – Benutzername oder App-Passwort stimmt nicht." : (e.message || "Verbindung fehlgeschlagen."), 7000);
   }
 }
-function odSection(){
-  if (nc.on()) return `<span class="lbl2">OneDrive (alt)</span><p>Nicht mehr in Benutzung – die App gleicht jetzt über Nextcloud ab.</p>`;
-  const cid = auth.clientId();
-  const st = !cid ? "Noch nicht eingerichtet." : !auth.connected() ? "Nicht verbunden." : ({ok:"Verbunden · zuletzt abgeglichen " + (od.last ? od.last.toTimeString().slice(0,5) : "–"), syncing:"Gleicht gerade ab …", offline:"Offline – wird später abgeglichen.", login:"Bitte erneut anmelden.", error:"Fehler: " + od.err, off:"Verbunden."}[od.status] || "Verbunden.");
-  return `<span class="lbl2">OneDrive-Speicher</span>
-    <p>${esc(st.replace(/\.$/, ""))}. Deine Daten liegen in OneDrive unter <b style="color:var(--fg)">Apps / Showplayer / Showplayer</b> (bzw. unter dem Namen deiner App-Registrierung) – die Lieder im Unterordner „Lieder“.</p>
-    <label class="setrow"><span class="lbl2">Client-ID (Anwendungs-ID aus der App-Registrierung)</span><input class="inp" id="odCid" value="${esc(cid)}" placeholder="z. B. 1a2b3c4d-…" autocomplete="off" spellcheck="false"></label>
-    <div class="setrow"><span class="lbl2">Umleitungs-URI (in der App-Registrierung eintragen)</span><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code id="odRedir" style="font-family:var(--f-mono);font-size:13px;overflow-wrap:anywhere;background:var(--raise);padding:6px 8px;border-radius:6px;min-width:0;flex:1">${esc(auth.redirect())}</code><button type="button" class="sec" data-a="odcopy">Kopieren</button></div></div>
-    <div class="acts" style="justify-content:flex-start">${!auth.connected() || od.status === "login" ? `<button class="pri" data-a="odlogin">Mit OneDrive verbinden</button>` : `<button class="sec" data-a="odsync">Jetzt abgleichen</button><button class="sec" data-a="odout">Trennen</button>`}</div>`;
-}
 
 /* ---------- Daten-Ordner (z. B. USB-Stick) ---------- */
 let dir = null, dirHandle = null, dirOk = false, dirName = "", dirBusy = false, dirErr = false, dirT = null, dirSaving = false, dirAgain = false;
@@ -2951,7 +2857,7 @@ const songFiles = new Map();   // Lied-ID -> Dateiname im Unterordner „Lieder�
 let dirSeen = 0;               // Änderungszeit der Daten-Datei beim letzten Lesen/Schreiben
 async function dataFile(){ try { return await (await dir.getFileHandle(DATA)).getFile(); } catch { return null; } }
 async function scanSongs(){ try { const ld = await dir.getDirectoryHandle("Lieder", {create:true}); for await (const [name, e] of ld.entries()) { if (e.kind !== "file") continue; const m = name.match(/\[([a-z0-9]+)\]\.[^.]+$/i); if (m) songFiles.set(m[1], name); } } catch {} }
-// Änderungen von außen (z. B. OneDrive vom anderen PC) übernehmen
+// Änderungen von außen (z. B. vom anderen PC über den USB-Ordner) übernehmen
 async function pullExternal(){
   const f = await dataFile(); if (!f || f.lastModified <= dirSeen) return false;
   let j; try { j = JSON.parse(await f.text()); } catch { return false; }
@@ -3021,12 +2927,11 @@ async function connectDir(h, ask){
 window.addEventListener("focus", () => { if (dirOk && !dirSaving) pullExternal().catch(()=>{}); });
 $("#sync").addEventListener("click", () => {
   if (nc.on()) { if (od.status === "error" || od.status === "offline") odRun(); else settingsSheet(); return; }
-  if (auth.clientId() && auth.connected()) { if (od.status === "login") auth.login(false); else if (od.status === "error" || od.status === "offline") odRun(); else settingsSheet(); return; }
   if (!dirHandle) { settingsSheet(); return; }
   if (dirHandle && (!dirOk || dirErr)) connectDir(dirHandle, true); else settingsSheet();
 });
 
-/* ---------- Fernbedienung: direkte Verbindung (WebRTC), Verbindungsaufbau über OneDrive ---------- */
+/* ---------- Fernbedienung: direkte Verbindung (WebRTC), Verbindungsaufbau über Nextcloud ---------- */
 const guessName = () => { const u = navigator.userAgent; if (/iPad/.test(u) || (/Macintosh/.test(u) && navigator.maxTouchPoints > 1)) return "iPad"; if (/iPhone/.test(u)) return "iPhone"; if (/Windows/.test(u)) return "Laptop"; if (/Mac/.test(u)) return "Mac"; return "Gerät"; };
 const devId = (() => { let v = ls.get("devid", null); if (!v) { v = uid("d").toLowerCase().replace(/[^a-z0-9]/g, ""); ls.set("devid", v); } return v; })();
 const RTC_CFG = {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
@@ -3079,7 +2984,7 @@ function execCmd(d){
   setTimeout(() => pushState(true), 150);
 }
 
-/* Player: meldet sich in OneDrive als erreichbar und nimmt Verbindungswünsche an */
+/* Player: meldet sich in der Nextcloud als erreichbar und nimmt Verbindungswünsche an */
 let polling = false;
 async function playerPoll(){
   if (polling || R.role !== "player" || !R.allow || !rcOk()) return;
@@ -3150,7 +3055,7 @@ async function remoteConnect(){
     odDelete("remote/answer-" + nonce + ".json").catch(() => {});
     await pc.setRemoteDescription({type: "answer", sdp: ans.sdp});
     setTimeout(() => { if (R.pc === pc && !R.connected) { closeRemote(); setRc(); toast("Direkte Verbindung kam nicht zustande. Sind beide Geräte im selben WLAN?", 6000); } }, 15000);
-  } catch (e) { if (R.pc === pc) closeRemote(); setRc(); toast(e && e.needLogin ? "Bitte zuerst mit OneDrive verbinden." : "Verbindung fehlgeschlagen. Neuer Versuch über die Anzeige oben.", 5000); }
+  } catch (e) { if (R.pc === pc) closeRemote(); setRc(); toast(e && e.needLogin ? "Bitte zuerst mit der Nextcloud verbinden." : "Verbindung fehlgeschlagen. Neuer Versuch über die Anzeige oben.", 5000); }
 }
 function send(cmd){
   if (!R.connected) { toast(R.connecting ? "Verbindung wird aufgebaut …" : "Nicht mit dem Player verbunden."); if (!R.connecting) remoteConnect(); return; }
@@ -3872,12 +3777,6 @@ async function boot(){
   if (!ev()) { curEv = events()[0]?.id || null; }
   render();
   if (ncImport(location.hash)) { history.replaceState(null, "", location.pathname + location.search); toast("Nextcloud-Anmeldung übernommen."); }
-  const red = await auth.handleRedirect();
-  if (red?.ok) { toast("Mit OneDrive verbunden."); sessionStorage.removeItem("sp-silent"); }
-  else if (red?.error && !red.silent && red.error !== "access_denied") toast("Anmeldung fehlgeschlagen: " + String(red.desc || red.error).split("\n")[0], 6000);
-  else if (red?.error === "access_denied") toast("Anmeldung abgebrochen.");
-  // Neues Gerät: automatisch anmelden. Ist der Browser bei Microsoft schon angemeldet, geht das ohne Eingabe.
-  if (!red && !nc.on() && auth.clientId() && lsRaw.get("sp-auth") && !auth.connected() && navigator.onLine && !sessionStorage.getItem("sp-auto")) { sessionStorage.setItem("sp-auto", "1"); auth.login(true); return; }
   if (idb) { try { const h = await iGet("kv", "dir"); if (h) { dirHandle = h; await connectDir(h, false); } } catch {} }
   setSync();
   if (cloud.ready()) odRun();
